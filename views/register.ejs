@@ -1,0 +1,68 @@
+<%
+  const safeForm = typeof form !== 'undefined' && form && typeof form === 'object' ? form : {};
+  const safeError = typeof error !== 'undefined' ? error : null;
+  const errorMessage = typeof safeError === 'string' ? safeError : (safeError && safeError.message ? safeError.message : '');
+  const safeCsrfToken = typeof csrfToken === 'string' ? csrfToken : '';
+  const safeNextPath = typeof nextPath === 'string' && nextPath.startsWith('/') ? nextPath : '/';
+%>
+<%- include('partials/head', {
+  pageTitle: '创建账号｜同见',
+  pageDescription: '创建同见账号，以稳定身份发布开放影像并参与讨论。'
+}) %>
+<body class="page page--auth">
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  <%- include('partials/header', { currentPath: '/register' }) %>
+
+  <main id="main-content" class="shell auth-layout" tabindex="-1">
+    <section class="auth-intro" aria-labelledby="auth-title">
+      <a class="back-link" href="/"><span aria-hidden="true">←</span> 返回放映室</a>
+      <p class="eyebrow"><span></span> 账号 / 创建</p>
+      <h1 id="auth-title">带着持续的身份，<br><em>加入每一次对话。</em></h1>
+      <p>账号用来连接你发布的作品与讨论。你可以使用笔名，不需要提供真实姓名、邮箱或手机号。</p>
+      <ul class="auth-principles" aria-label="账号说明">
+        <li><span aria-hidden="true">◇</span><strong>公开显示名</strong><small>你在作品和讨论旁展示的名称</small></li>
+        <li><span aria-hidden="true">◎</span><strong>唯一用户名</strong><small>用于登录并区分同名用户</small></li>
+        <li><span aria-hidden="true">∿</span><strong>本地安全会话</strong><small>密码不会以明文保存</small></li>
+      </ul>
+    </section>
+
+    <section class="auth-card" aria-labelledby="register-form-title">
+      <header class="auth-card__header">
+        <span class="auth-card__index" aria-hidden="true">01</span>
+        <div><h2 id="register-form-title">创建账号</h2><p>三项信息即可开始。</p></div>
+      </header>
+
+      <% if (errorMessage) { %>
+        <div class="alert alert--error alert--compact" id="auth-error" role="alert">
+          <span class="alert__icon" aria-hidden="true">!</span><p><%= errorMessage %></p>
+        </div>
+      <% } %>
+
+      <form class="auth-form" action="/register" method="post"<% if (errorMessage) { %> aria-describedby="auth-error"<% } %>>
+        <input type="hidden" name="_csrf" value="<%= safeCsrfToken %>">
+        <input type="hidden" name="next" value="<%= safeNextPath %>">
+        <label class="field">
+          <span class="field__label">用户名 <i>必填</i></span>
+          <input type="text" name="username" value="<%= safeForm.username || '' %>" minlength="3" maxlength="32" pattern="[A-Za-z0-9][A-Za-z0-9_-]*" autocomplete="username" autocapitalize="none" spellcheck="false" inputmode="text" placeholder="例如 open_frame" required>
+          <span class="field__hint">3–32 个字符；以字母或数字开头，可使用下划线和连字符，登录时不区分大小写</span>
+        </label>
+        <label class="field">
+          <span class="field__label">显示名 <i>必填</i></span>
+          <input type="text" name="displayName" value="<%= safeForm.displayName || '' %>" maxlength="40" autocomplete="nickname" placeholder="你想让大家看到的名字" required>
+          <span class="field__hint">可以使用中文、笔名或团体名称，最多 40 个字符</span>
+        </label>
+        <label class="field">
+          <span class="field__label">密码 <i>必填</i></span>
+          <input type="password" name="password" minlength="8" maxlength="128" autocomplete="new-password" placeholder="至少 8 个字符" required>
+          <span class="field__hint">请使用独立密码；当前试验阶段不支持找回密码</span>
+        </label>
+        <button class="button button--primary button--large auth-form__submit" type="submit">创建账号 <span aria-hidden="true">→</span></button>
+      </form>
+
+      <p class="auth-card__switch">已经有账号？<a href="/login?next=<%= encodeURIComponent(safeNextPath) %>">直接登录</a></p>
+    </section>
+  </main>
+
+  <%- include('partials/footer') %>
+</body>
+</html>

@@ -6,6 +6,11 @@ import { ValidationError } from '../../src/errors.js';
 import {
   FIELD_LIMITS,
   validateDiscussionBody,
+  validateDisplayName,
+  validateLoginFields,
+  validatePassword,
+  validateRegistrationFields,
+  validateUsername,
   validateVideoFields
 } from '../../src/validation.js';
 
@@ -108,3 +113,47 @@ test('讨论正文边界与页面 5,000 字符契约一致', () => {
   assert.throws(() => validateDiscussionBody('回\0应'), /非法字符/);
 });
 
+test('注册字段规范化用户名、保留密码原文并支持 Unicode 显示名称', () => {
+  const fields = validateRegistrationFields({
+    username: '  Ａlice_DEV  ',
+    displayName: '  同见用户 🚀  ',
+    password: '  保留空格的密码  '
+  });
+  assert.deepEqual(fields, {
+    username: 'alice_dev',
+    displayName: '同见用户 🚀',
+    password: '  保留空格的密码  '
+  });
+  assert.deepEqual(validateLoginFields({ username: 'ALICE_DEV', password: 'password-123' }), {
+    username: 'alice_dev',
+    password: 'password-123'
+  });
+});
+
+test('用户名、显示名称和密码执行明确的长度、字符与 NUL 边界', () => {
+  assert.equal(validateUsername('abc'), 'abc');
+  assert.equal(validateUsername(`a${'b'.repeat(FIELD_LIMITS.username - 1)}`).length, FIELD_LIMITS.username);
+  assert.equal(validateDisplayName('🚀'.repeat(FIELD_LIMITS.displayName)), '🚀'.repeat(FIELD_LIMITS.displayName));
+  assert.equal(validatePassword('密'.repeat(FIELD_LIMITS.passwordMin)), '密'.repeat(FIELD_LIMITS.passwordMin));
+
+  const invalidCalls = [
+    [() => validateUsername('ab'), /3/],
+    [() => validateUsername('a'.repeat(FIELD_LIMITS.username + 1)), /32/],
+    [() => validateUsername('_alice'), /开头/],
+    [() => validateUsername('alice.name'), /只能包含/],
+    [() => validateUsername('爱丽丝'), /只能包含/],
+    [() => validateDisplayName(' '), /显示名称/],
+    [() => validateDisplayName('名'.repeat(FIELD_LIMITS.displayName + 1)), /40/],
+    [() => validateDisplayName('前\0后'), /非法字符/],
+    [() => validatePassword('short'), /8/],
+    [() => validatePassword('密'.repeat(FIELD_LIMITS.password + 1)), /128/],
+    [() => validatePassword('        '), /密码/],
+    [() => validatePassword('password\0value'), /非法字符/]
+  ];
+  for (const [call, message] of invalidCalls) {
+    assert.throws(
+      call,
+      (error) => error instanceof ValidationError && error.status === 400 && message.test(error.message)
+    );
+  }
+});

@@ -7,7 +7,7 @@ async function main() {
   const running = await startServer();
   const address = running.address;
   const shownHost = typeof address === 'object' && address?.address === '::' ? '0.0.0.0' : address?.address;
-  console.log(`共映已启动：http://${shownHost}:${address.port}`);
+  console.log(`同见已启动：http://${shownHost}:${address.port}`);
 
   let closing = false;
   const shutdown = async () => {
@@ -27,8 +27,7 @@ async function main() {
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   main().catch((error) => {
-    console.error(`共映启动失败：${error.message}`);
+    console.error(`同见启动失败：${error.message}`);
     process.exitCode = 1;
   });
 }
-

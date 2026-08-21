@@ -36,10 +36,18 @@
   const safeDiscussions = typeof discussions !== 'undefined' && Array.isArray(discussions) ? discussions : [];
   const safeDiscussionError = typeof discussionError !== 'undefined' ? discussionError : null;
   const discussionErrorMessage = typeof safeDiscussionError === 'string' ? safeDiscussionError : (safeDiscussionError && safeDiscussionError.message ? safeDiscussionError.message : '');
+  const videoCurrentUser = typeof currentUser !== 'undefined' && currentUser && typeof currentUser === 'object' ? currentUser : null;
+  const currentDisplayName = videoCurrentUser ? (videoCurrentUser.displayName || videoCurrentUser.display_name || videoCurrentUser.username || '用户') : '';
+  const currentUsername = videoCurrentUser ? (videoCurrentUser.username || '') : '';
+  const videoAccountDisplayName = video.accountDisplayName || video.account_display_name || video.uploaderDisplayName || video.uploader_display_name || '';
+  const videoAccountUsername = video.accountUsername || video.account_username || video.uploaderUsername || video.uploader_username || '';
+  const videoAccountLabel = videoAccountDisplayName || videoAccountUsername;
+  const safeCsrfToken = typeof csrfToken === 'string' ? csrfToken : '';
 %>
 <%- include('partials/head', {
-  pageTitle: video.title + '｜共映',
-  pageDescription: description || ('观看 ' + video.creator + ' 创作的《' + video.title + '》。')
+  pageTitle: video.title + '｜同见',
+  pageDescription: description || ('观看 ' + video.creator + ' 创作的《' + video.title + '》。'),
+  includeMathEditor: Boolean(videoCurrentUser)
 }) %>
 <body class="page page--video">
   <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -55,6 +63,9 @@
       </div>
       <h1><%= video.title %></h1>
       <p>一段由 <strong><%= video.creator %></strong> 创作并开放分享的影像</p>
+      <% if (videoAccountLabel) { %>
+        <p class="video-heading__publisher">发布者：<strong><%= videoAccountLabel %></strong><% if (videoAccountUsername && videoAccountUsername !== videoAccountLabel) { %> <span>@<%= videoAccountUsername %></span><% } %></p>
+      <% } %>
     </header>
 
     <section class="player-frame" aria-label="视频播放器">
@@ -62,7 +73,7 @@
         <source src="/videos/<%= videoId %>/media" type="video/mp4">
         你的浏览器不支持 HTML5 视频播放。你可以<a href="/videos/<%= videoId %>/media">直接打开视频文件</a>。
       </video>
-      <div class="player-frame__caption" aria-hidden="true"><span>GONGYING / 共映</span><span>OPEN VIDEO</span></div>
+      <div class="player-frame__caption" aria-hidden="true"><span>同见</span><span>OPEN VIDEO</span></div>
     </section>
 
     <div class="video-information">
@@ -76,6 +87,7 @@
         <% } %>
         <dl class="work-facts">
           <div><dt>创作者</dt><dd><%= video.creator %></dd></div>
+          <% if (videoAccountLabel) { %><div><dt>发布账号</dt><dd><%= videoAccountLabel %><% if (videoAccountUsername && videoAccountUsername !== videoAccountLabel) { %> <span class="account-handle">@<%= videoAccountUsername %></span><% } %></dd></div><% } %>
           <% if (video.originalFilename || video.original_filename) { %><div><dt>原文件名</dt><dd><%= video.originalFilename || video.original_filename %></dd></div><% } %>
           <% if (formattedDate) { %><div><dt>发布时间</dt><dd><%= formattedDate %></dd></div><% } %>
         </dl>
@@ -91,7 +103,7 @@
         <p><%= licenseView.summary %></p>
         <p class="license-card__credit">
           <% if (licenseView.cc0) { %>
-            <strong>署名信息：</strong><%= video.creator %>。CC0 使用者无需署名，但共映仍保留创作者记录。
+            <strong>署名信息：</strong><%= video.creator %>。CC0 使用者无需署名，但同见仍保留创作者记录。
           <% } else { %>
             使用时请署名：<strong><%= video.creator %></strong>
           <% } %>
@@ -120,7 +132,9 @@
             </div>
           <% } else { %>
             <% safeDiscussions.forEach(function(discussion, index) {
-              const nickname = discussion.nickname || discussion.author || '匿名观众';
+              const accountDisplayName = discussion.accountDisplayName || discussion.account_display_name || '';
+              const accountUsername = discussion.accountUsername || discussion.account_username || '';
+              const nickname = accountDisplayName || accountUsername || discussion.nickname || discussion.author || '历史匿名观众';
               const renderedBody = discussion.renderedBody || discussion.rendered_body || discussion.bodyHtml || discussion.body_html || discussion.html || '';
               const discussionCreated = discussion.createdAt || discussion.created_at;
               let discussionDate = '';
@@ -133,8 +147,11 @@
             %>
               <article class="discussion" id="discussion-<%= discussion.id || index %>">
                 <header class="discussion__header">
-                  <span class="discussion__avatar" aria-hidden="true"><%= String(nickname).slice(0, 1) %></span>
-                  <div><strong><%= nickname %></strong><% if (discussionDate) { %><time datetime="<%= discussionCreated %>"><%= discussionDate %></time><% } %></div>
+                  <span class="discussion__avatar" aria-hidden="true"><%= Array.from(String(nickname))[0] || '用' %></span>
+                  <div>
+                    <strong><%= nickname %><% if (accountUsername && accountUsername !== nickname) { %> <span class="discussion__handle">@<%= accountUsername %></span><% } %></strong>
+                    <% if (discussionDate) { %><time datetime="<%= discussionCreated %>"><%= discussionDate %></time><% } %>
+                  </div>
                   <span class="discussion__number">#<%= String(index + 1).padStart(2, '0') %></span>
                 </header>
                 <div class="markdown-body discussion__body"><%- renderedBody %></div>
@@ -146,20 +163,26 @@
         <aside class="discussion-composer" aria-labelledby="composer-title">
           <div class="discussion-composer__intro">
             <span aria-hidden="true">✦</span>
-            <div><h3 id="composer-title">写下你的回应</h3><p>系统会为你生成一个随机中文昵称，不记录或展示 IP 地址。</p></div>
+            <div>
+              <h3 id="composer-title"><% if (videoCurrentUser) { %>以 <%= currentDisplayName %> 的身份回应<% } else { %>登录后写下回应<% } %></h3>
+              <p><% if (videoCurrentUser) { %>讨论会关联到你的稳定账号<% if (currentUsername && currentUsername !== currentDisplayName) { %> @<%= currentUsername %><% } %>，请围绕作品真诚交流。<% } else { %>观看始终开放；发布讨论需要一个账号。<% } %></p>
+            </div>
           </div>
 
           <% if (discussionErrorMessage) { %>
             <div class="alert alert--error alert--compact" role="alert"><span class="alert__icon" aria-hidden="true">!</span><p><%= discussionErrorMessage %></p></div>
           <% } %>
 
+          <% if (videoCurrentUser) { %>
           <form action="/videos/<%= videoId %>/discussions" method="post" data-discussion-form>
+            <input type="hidden" name="_csrf" value="<%= safeCsrfToken %>">
             <div class="editor" data-markdown-editor data-preview-endpoint="/api/markdown-preview">
               <section class="editor__pane" aria-labelledby="editor-input-title">
                 <div class="editor__bar">
                   <strong id="editor-input-title">Markdown</strong>
                   <span>支持 **粗体**、链接、列表和 $LaTeX$</span>
                 </div>
+                <%- include('partials/math-editor') %>
                 <label class="visually-hidden" for="discussion-body">讨论正文</label>
                 <textarea id="discussion-body" name="body" rows="9" maxlength="5000" required placeholder="写下你看到、想到或仍感困惑的……&#10;&#10;行内公式示例：$E=mc^2$" data-markdown-input></textarea>
               </section>
@@ -174,11 +197,20 @@
               </section>
             </div>
             <div class="composer-submit">
-              <p><span aria-hidden="true">⏱</span> 全站每个网络地址 <%= typeof discussionCooldownSeconds === 'number' ? discussionCooldownSeconds : 30 %> 秒内可发布一次</p>
+              <p><span aria-hidden="true">⏱</span> 每个账号与网络地址 <%= typeof discussionCooldownSeconds === 'number' ? discussionCooldownSeconds : 30 %> 秒内可发布一次</p>
               <button class="button button--primary" type="submit" data-discussion-submit>发布讨论 <span aria-hidden="true">→</span></button>
             </div>
             <p class="composer-status" data-discussion-status aria-live="polite"></p>
           </form>
+          <% } else { %>
+            <div class="discussion-auth-gate">
+              <p>注册账号可以让别人识别你在不同讨论中的连续思考，不需要提供真实姓名。</p>
+              <div class="discussion-auth-gate__actions">
+                <a class="button button--primary" href="/login?next=<%= encodeURIComponent('/videos/' + videoId) %>">登录后参与</a>
+                <a class="text-link" href="/register?next=<%= encodeURIComponent('/videos/' + videoId) %>">创建账号 <span aria-hidden="true">→</span></a>
+              </div>
+            </div>
+          <% } %>
         </aside>
       </div>
     </section>

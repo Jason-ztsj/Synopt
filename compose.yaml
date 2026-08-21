@@ -2,7 +2,7 @@ services:
   app:
     build:
       context: .
-    image: gongying-video-mvp:local
+    image: tongjian-video-mvp:local
     restart: unless-stopped
     init: true
     ports:
@@ -14,6 +14,9 @@ services:
       VIDEO_STORAGE_PATH: /app/data/videos
       MAX_UPLOAD_MB: "${MAX_UPLOAD_MB:-90}"
       DISCUSSION_COOLDOWN_SECONDS: "${DISCUSSION_COOLDOWN_SECONDS:-30}"
+      AUTH_COOLDOWN_SECONDS: "${AUTH_COOLDOWN_SECONDS:-2}"
+      SESSION_TTL_HOURS: "${SESSION_TTL_HOURS:-168}"
+      SESSION_COOKIE_SECURE: "${SESSION_COOKIE_SECURE:-false}"
       CLIENT_IP_MODE: "${CLIENT_IP_MODE:-direct}"
     volumes:
       - ./data:/app/data

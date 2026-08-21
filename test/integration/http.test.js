@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import { once } from 'node:events';
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
@@ -35,6 +36,65 @@ async function freePort() {
 
 async function delay(milliseconds) {
   await new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function collectCookies(jar, response) {
+  const values = typeof response.headers.getSetCookie === 'function'
+    ? response.headers.getSetCookie()
+    : [response.headers.get('set-cookie')].filter(Boolean);
+  for (const value of values) {
+    for (const cookie of value.split(/,(?=\s*[^;,]+=)/)) {
+      const pair = cookie.split(';', 1)[0];
+      const separator = pair.indexOf('=');
+      if (separator < 1) continue;
+      const name = pair.slice(0, separator).trim();
+      const cookieValue = decodeURIComponent(pair.slice(separator + 1));
+      if (cookieValue) jar.set(name, cookieValue);
+      else jar.delete(name);
+    }
+  }
+}
+
+function cookieHeader(jar) {
+  return [...jar].map(([name, value]) => `${name}=${encodeURIComponent(value)}`).join('; ');
+}
+
+async function createTestAccount(baseUrl) {
+  const cookies = new Map();
+  const registerPage = await fetch(`${baseUrl}/register`);
+  collectCookies(cookies, registerPage);
+  const html = await registerPage.text();
+  const csrfToken = /name="_csrf"\s+value="([^"]+)"/.exec(html)?.[1];
+  if (!csrfToken) throw new Error('注册页面没有 CSRF 凭证');
+
+  const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 12);
+  const username = `tester_${suffix}`;
+  const password = 'Correct-Horse-2026';
+  const response = await fetch(`${baseUrl}/register`, {
+    method: 'POST',
+    headers: {
+      cookie: cookieHeader(cookies),
+      'content-type': 'application/x-www-form-urlencoded'
+    },
+    body: new URLSearchParams({
+      _csrf: csrfToken,
+      username,
+      displayName: '🚀验收用户',
+      password
+    }),
+    redirect: 'manual'
+  });
+  if (response.status !== 303) {
+    throw new Error(`测试账号注册失败（${response.status}）：${await response.text()}`);
+  }
+  collectCookies(cookies, response);
+  return {
+    cookies,
+    username,
+    password,
+    csrfToken: cookies.get('tongjian_csrf'),
+    cookieHeader: () => cookieHeader(cookies)
+  };
 }
 
 async function startApplication({
@@ -84,8 +144,10 @@ async function startApplication({
     try {
       const response = await fetch(`${baseUrl}/healthz`);
       if (response.status === 200) {
+        const auth = await createTestAccount(baseUrl);
         return {
           baseUrl,
+          auth,
           child,
           dataDirectory,
           databasePath,
@@ -115,7 +177,7 @@ async function stopApplication(instance, { removeData = true } = {}) {
   if (removeData) await rm(instance.dataDirectory, { recursive: true, force: true });
 }
 
-async function upload(baseUrl, {
+async function upload(instance, {
   title = '河流经过我们的村庄',
   creator = '山谷影像小组',
   description = '一段用于自动化验收的开放影像。',
@@ -127,6 +189,7 @@ async function upload(baseUrl, {
   mimeType = 'video/mp4'
 } = {}) {
   const form = new FormData();
+  form.set('_csrf', instance.auth.csrfToken);
   form.set('title', title);
   form.set('creator', creator);
   form.set('description', description);
@@ -135,8 +198,9 @@ async function upload(baseUrl, {
   if (noDerivatives) form.set('noDerivatives', 'on');
   form.set('video', new Blob([bytes], { type: mimeType }), filename);
 
-  return fetch(`${baseUrl}/videos`, {
+  return fetch(`${instance.baseUrl}/videos`, {
     method: 'POST',
+    headers: { cookie: instance.auth.cookieHeader() },
     body: form,
     redirect: 'manual'
   });
@@ -165,7 +229,7 @@ test('真实 HTTP：上传 CC BY-NC-ND 视频并支持完整、Range 与 HEAD �
   t.after(() => stopApplication(instance));
 
   const original = makeMp4(64);
-  const response = await upload(instance.baseUrl, {
+  const response = await upload(instance, {
     bytes: original,
     nonCommercial: true,
     noDerivatives: true
@@ -202,11 +266,21 @@ test('真实 HTTP：上传 CC BY-NC-ND 视频并支持完整、Range 与 HEAD �
   const full = await fetch(mediaUrl);
   assert.equal(full.status, 200);
   assert.equal(full.headers.get('accept-ranges'), 'bytes');
+  assert.equal(full.headers.get('cache-control'), 'private, no-store');
+  const mediaCookies = new Map();
+  collectCookies(mediaCookies, full);
+  assert.ok(mediaCookies.has('tongjian_csrf'));
   assert.equal(Number(full.headers.get('content-length')), original.length);
   assert.deepEqual(Buffer.from(await full.arrayBuffer()), original);
 
-  const range = await fetch(mediaUrl, { headers: { Range: 'bytes=4-7' } });
+  const range = await fetch(mediaUrl, {
+    headers: {
+      cookie: cookieHeader(mediaCookies),
+      Range: 'bytes=4-7'
+    }
+  });
   assert.equal(range.status, 206);
+  assert.equal(range.headers.get('cache-control'), 'public, max-age=3600');
   assert.equal(range.headers.get('content-range'), `bytes 4-7/${original.length}`);
   assert.equal(range.headers.get('content-length'), '4');
   assert.equal(Buffer.from(await range.arrayBuffer()).toString('ascii'), 'ftyp');
@@ -251,7 +325,7 @@ test('真实 HTTP：拒绝扩展名、MIME、ftyp 错误以及超限文件，并
   ];
 
   for (const invalid of invalidCases) {
-    const response = await upload(instance.baseUrl, invalid);
+    const response = await upload(instance, invalid);
     assert.equal(response.status, 400, `应拒绝 ${invalid.filename}/${invalid.mimeType}`);
     const responseHtml = await response.text();
     assert.match(responseHtml, /MP4|视频|文件/i);
@@ -262,7 +336,7 @@ test('真实 HTTP：拒绝扩展名、MIME、ftyp 错误以及超限文件，并
     assert.deepEqual(await allFiles(instance.storageDirectory), []);
   }
 
-  const tooLarge = await upload(instance.baseUrl, {
+  const tooLarge = await upload(instance, {
     bytes: makeMp4(1024 * 1024 + 1)
   });
   assert.equal(tooLarge.status, 413);
@@ -278,14 +352,20 @@ test('真实 HTTP：讨论首次发布成功，立即重复返回 429、Retry-Af
   const instance = await startApplication({ cooldownSeconds: '30' });
   t.after(() => stopApplication(instance));
 
-  const uploaded = await upload(instance.baseUrl);
+  const uploaded = await upload(instance);
   assert.equal(uploaded.status, 303);
   const location = uploaded.headers.get('location');
 
-  const body = new URLSearchParams({ body: '**第一条讨论**，以及 $E=mc^2$。' });
+  const body = new URLSearchParams({
+    _csrf: instance.auth.csrfToken,
+    body: '**第一条讨论**，以及 $E=mc^2$。'
+  });
   const first = await fetch(`${instance.baseUrl}${location}/discussions`, {
     method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    headers: {
+      cookie: instance.auth.cookieHeader(),
+      'content-type': 'application/x-www-form-urlencoded'
+    },
     body,
     redirect: 'manual'
   });
@@ -294,7 +374,10 @@ test('真实 HTTP：讨论首次发布成功，立即重复返回 429、Retry-Af
 
   const repeated = await fetch(`${instance.baseUrl}${location}/discussions`, {
     method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    headers: {
+      cookie: instance.auth.cookieHeader(),
+      'content-type': 'application/x-www-form-urlencoded'
+    },
     body,
     redirect: 'manual'
   });
@@ -309,6 +392,102 @@ test('真实 HTTP：讨论首次发布成功，立即重复返回 429、Retry-Af
   assert.doesNotMatch(html, /(?:127\.0\.0\.1|::1)/);
 });
 
+test('真实 HTTP：账号会话保护上传与讨论，校验 CSRF，并支持退出后重新登录', async (t) => {
+  const instance = await startApplication();
+  t.after(() => stopApplication(instance));
+
+  const anonymousRegister = await fetch(`${instance.baseUrl}/register`);
+  assert.equal(anonymousRegister.headers.get('cache-control'), 'no-store');
+  const anonymousCookies = typeof anonymousRegister.headers.getSetCookie === 'function'
+    ? anonymousRegister.headers.getSetCookie()
+    : [anonymousRegister.headers.get('set-cookie')].filter(Boolean);
+  assert.match(anonymousCookies.join('; '), /tongjian_csrf=.*HttpOnly/i);
+  assert.match(anonymousCookies.join('; '), /SameSite=Lax/i);
+  const unsafeNextPage = await fetch(`${instance.baseUrl}/login?next=${encodeURIComponent('//evil.example/path')}`);
+  assert.match(await unsafeNextPage.text(), /name="next"\s+value="\/"/);
+
+  const anonymousUploadPage = await fetch(`${instance.baseUrl}/upload`, { redirect: 'manual' });
+  assert.equal(anonymousUploadPage.status, 303);
+  assert.match(anonymousUploadPage.headers.get('location') || '', /^\/login\?next=/);
+
+  const uploaded = await upload(instance, { title: '账号归属验证' });
+  assert.equal(uploaded.status, 303);
+  const location = uploaded.headers.get('location');
+  const detail = await fetch(new URL(location, instance.baseUrl));
+  assert.match(await detail.text(), /验收用户/);
+
+  const authenticatedDetail = await fetch(new URL(location, instance.baseUrl), {
+    headers: { cookie: instance.auth.cookieHeader() }
+  });
+  const authenticatedHtml = await authenticatedDetail.text();
+  assert.match(authenticatedHtml, /account-chip__avatar[^>]*>🚀<\/span>/);
+  assert.match(authenticatedHtml, /data-formula-editor/);
+  assert.match(authenticatedHtml, /\/static\/js\/math-editor\.js/);
+  const mathLiveModule = await fetch(`${instance.baseUrl}/assets/mathlive/mathlive.min.mjs`);
+  assert.equal(mathLiveModule.status, 200);
+  assert.match(mathLiveModule.headers.get('content-type') || '', /javascript/);
+  const mathLiveFont = await fetch(`${instance.baseUrl}/assets/mathlive/fonts/KaTeX_Main-Regular.woff2`);
+  assert.equal(mathLiveFont.status, 200);
+
+  const rejectedCsrf = await fetch(`${instance.baseUrl}${location}/discussions`, {
+    method: 'POST',
+    headers: {
+      accept: 'application/json',
+      cookie: instance.auth.cookieHeader(),
+      'content-type': 'application/x-www-form-urlencoded'
+    },
+    body: new URLSearchParams({ body: '缺少页面凭证的请求' })
+  });
+  assert.equal(rejectedCsrf.status, 403);
+  assert.match((await rejectedCsrf.json()).error, /凭证|刷新/);
+
+  const logout = await fetch(`${instance.baseUrl}/logout`, {
+    method: 'POST',
+    headers: {
+      cookie: instance.auth.cookieHeader(),
+      'content-type': 'application/x-www-form-urlencoded'
+    },
+    body: new URLSearchParams({ _csrf: instance.auth.csrfToken }),
+    redirect: 'manual'
+  });
+  assert.equal(logout.status, 303);
+  collectCookies(instance.auth.cookies, logout);
+  const afterLogout = await fetch(`${instance.baseUrl}/upload`, {
+    headers: { cookie: instance.auth.cookieHeader() },
+    redirect: 'manual'
+  });
+  assert.equal(afterLogout.status, 303);
+
+  const loginPage = await fetch(`${instance.baseUrl}/login`, {
+    headers: { cookie: instance.auth.cookieHeader() }
+  });
+  collectCookies(instance.auth.cookies, loginPage);
+  const loginHtml = await loginPage.text();
+  const loginCsrf = /name="_csrf"\s+value="([^"]+)"/.exec(loginHtml)?.[1];
+  assert.ok(loginCsrf);
+  const login = await fetch(`${instance.baseUrl}/login`, {
+    method: 'POST',
+    headers: {
+      cookie: instance.auth.cookieHeader(),
+      'content-type': 'application/x-www-form-urlencoded'
+    },
+    body: new URLSearchParams({
+      _csrf: loginCsrf,
+      username: instance.auth.username,
+      password: instance.auth.password,
+      next: '/upload'
+    }),
+    redirect: 'manual'
+  });
+  assert.equal(login.status, 303);
+  assert.equal(login.headers.get('location'), '/upload');
+  collectCookies(instance.auth.cookies, login);
+  const authenticatedAgain = await fetch(`${instance.baseUrl}/upload`, {
+    headers: { cookie: instance.auth.cookieHeader() }
+  });
+  assert.equal(authenticatedAgain.status, 200);
+});
+
 test('真实 HTTP：重启进程后视频、Range、许可证和讨论仍然存在，内存冷却窗口会清空', async (t) => {
   const dataDirectory = await mkdtemp(path.join(tmpdir(), 'gongying-restart-test-'));
   let firstInstance;
@@ -321,7 +500,7 @@ test('真实 HTTP：重启进程后视频、Range、许可证和讨论仍然存�
 
   firstInstance = await startApplication({ dataDirectory });
   const mediaBytes = makeMp4(32);
-  const uploaded = await upload(firstInstance.baseUrl, {
+  const uploaded = await upload(firstInstance, {
     bytes: mediaBytes,
     attribution: false,
     nonCommercial: true,
@@ -332,8 +511,14 @@ test('真实 HTTP：重启进程后视频、Range、许可证和讨论仍然存�
 
   const firstDiscussion = await fetch(`${firstInstance.baseUrl}${location}/discussions`, {
     method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ body: '重启前的讨论' }),
+    headers: {
+      cookie: firstInstance.auth.cookieHeader(),
+      'content-type': 'application/x-www-form-urlencoded'
+    },
+    body: new URLSearchParams({
+      _csrf: firstInstance.auth.csrfToken,
+      body: '重启前的讨论'
+    }),
     redirect: 'manual'
   });
   assert.equal(firstDiscussion.status, 303);
@@ -358,8 +543,14 @@ test('真实 HTTP：重启进程后视频、Range、许可证和讨论仍然存�
   // address is accepted immediately after restarting while persisted data remains.
   const afterRestart = await fetch(`${secondInstance.baseUrl}${location}/discussions`, {
     method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ body: '重启后的第二条讨论' }),
+    headers: {
+      cookie: secondInstance.auth.cookieHeader(),
+      'content-type': 'application/x-www-form-urlencoded'
+    },
+    body: new URLSearchParams({
+      _csrf: secondInstance.auth.csrfToken,
+      body: '重启后的第二条讨论'
+    }),
     redirect: 'manual'
   });
   assert.equal(afterRestart.status, 303);

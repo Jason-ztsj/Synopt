@@ -1,0 +1,57 @@
+<%
+  const safeForm = typeof form !== 'undefined' && form && typeof form === 'object' ? form : {};
+  const safeError = typeof error !== 'undefined' ? error : null;
+  const errorMessage = typeof safeError === 'string' ? safeError : (safeError && safeError.message ? safeError.message : '');
+  const safeCsrfToken = typeof csrfToken === 'string' ? csrfToken : '';
+  const safeNextPath = typeof nextPath === 'string' && nextPath.startsWith('/') ? nextPath : '/';
+%>
+<%- include('partials/head', {
+  pageTitle: '登录｜同见',
+  pageDescription: '登录同见，继续发布开放影像并参与讨论。'
+}) %>
+<body class="page page--auth">
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  <%- include('partials/header', { currentPath: '/login' }) %>
+
+  <main id="main-content" class="shell auth-layout auth-layout--login" tabindex="-1">
+    <section class="auth-intro" aria-labelledby="auth-title">
+      <a class="back-link" href="/"><span aria-hidden="true">←</span> 返回放映室</a>
+      <p class="eyebrow"><span></span> 账号 / 登录</p>
+      <h1 id="auth-title">回到你的作品，<br><em>也回到未完的讨论。</em></h1>
+      <p>登录后可以发布开放许可视频，并以稳定的公开身份回应他人。观看视频不需要登录。</p>
+    </section>
+
+    <section class="auth-card" aria-labelledby="login-form-title">
+      <header class="auth-card__header">
+        <span class="auth-card__index" aria-hidden="true">01</span>
+        <div><h2 id="login-form-title">登录账号</h2><p>使用用户名和密码继续。</p></div>
+      </header>
+
+      <% if (errorMessage) { %>
+        <div class="alert alert--error alert--compact" id="auth-error" role="alert">
+          <span class="alert__icon" aria-hidden="true">!</span><p><%= errorMessage %></p>
+        </div>
+      <% } %>
+
+      <form class="auth-form" action="/login" method="post"<% if (errorMessage) { %> aria-describedby="auth-error"<% } %>>
+        <input type="hidden" name="_csrf" value="<%= safeCsrfToken %>">
+        <input type="hidden" name="next" value="<%= safeNextPath %>">
+        <label class="field">
+          <span class="field__label">用户名 <i>必填</i></span>
+          <input type="text" name="username" value="<%= safeForm.username || '' %>" minlength="3" maxlength="32" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="输入你的用户名" required autofocus>
+        </label>
+        <label class="field">
+          <span class="field__label">密码 <i>必填</i></span>
+          <input type="password" name="password" minlength="8" maxlength="128" autocomplete="current-password" placeholder="输入你的密码" required>
+          <span class="field__hint">当前试验阶段不支持找回密码</span>
+        </label>
+        <button class="button button--primary button--large auth-form__submit" type="submit">登录 <span aria-hidden="true">→</span></button>
+      </form>
+
+      <p class="auth-card__switch">还没有账号？<a href="/register?next=<%= encodeURIComponent(safeNextPath) %>">创建一个</a></p>
+    </section>
+  </main>
+
+  <%- include('partials/footer') %>
+</body>
+</html>

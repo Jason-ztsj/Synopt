@@ -8,6 +8,15 @@ import { pipeline } from 'node:stream/promises';
 import express from 'express';
 import multer from 'multer';
 
+import {
+  generateCsrfToken,
+  generateSessionToken,
+  hashCsrfToken,
+  hashPassword,
+  hashSessionToken,
+  verifyCsrfToken,
+  verifyPassword
+} from './auth.js';
 import { loadConfig } from './config.js';
 import { openDatabase } from './database.js';
 import { AppError, ValidationError } from './errors.js';
@@ -15,12 +24,70 @@ import { getClientIp } from './ip.js';
 import { getLicense, normalizeLicense } from './license.js';
 import { renderMarkdown } from './markdown.js';
 import { validateMp4File, validateMp4Metadata } from './mp4.js';
-import { randomNickname } from './nickname.js';
 import { DiscussionRateLimiter } from './rate-limit.js';
-import { validateDiscussionBody, validateVideoFields } from './validation.js';
+import {
+  validateDiscussionBody,
+  validateLoginFields,
+  validateRegistrationFields,
+  validateVideoFields
+} from './validation.js';
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(moduleDirectory, '..');
+const SESSION_COOKIE = 'tongjian_session';
+const CSRF_COOKIE = 'tongjian_csrf';
+
+function readCookie(request, name) {
+  const header = request.get('cookie');
+  if (!header) return null;
+  for (const part of header.split(';')) {
+    const separator = part.indexOf('=');
+    if (separator < 0 || part.slice(0, separator).trim() !== name) continue;
+    try {
+      return decodeURIComponent(part.slice(separator + 1).trim());
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function cookieValue(name, value, {
+  maxAgeSeconds,
+  secure = false,
+  httpOnly = true
+} = {}) {
+  const parts = [
+    `${name}=${encodeURIComponent(value)}`,
+    'Path=/',
+    'SameSite=Lax'
+  ];
+  if (httpOnly) parts.push('HttpOnly');
+  if (secure) parts.push('Secure');
+  if (Number.isInteger(maxAgeSeconds)) parts.push(`Max-Age=${Math.max(0, maxAgeSeconds)}`);
+  return parts.join('; ');
+}
+
+function appendCookie(response, value) {
+  response.append('Set-Cookie', value);
+}
+
+function safeNextPath(value, fallback = '/') {
+  if (typeof value !== 'string') return fallback;
+  const candidate = value.trim();
+  if (
+    candidate.length > 2048
+    || !candidate.startsWith('/')
+    || candidate.startsWith('//')
+    || candidate.includes('\\')
+    || /[\u0000-\u001f\u007f]/.test(candidate)
+  ) return fallback;
+  return candidate;
+}
+
+function usableOpaqueToken(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{32,256}$/.test(value);
+}
 
 function wantsJson(request) {
   return request.get('accept')?.includes('application/json')
@@ -75,15 +142,25 @@ function discussionView(discussion) {
 
 export function createApp(options = {}) {
   const config = options.config ?? loadConfig(options.env, options.cwd);
+  const now = options.now ?? (() => Date.now());
+  const nowIso = () => new Date(now()).toISOString();
   fs.mkdirSync(config.videoStoragePath, { recursive: true });
   fs.mkdirSync(config.temporaryStoragePath, { recursive: true });
   const database = options.database ?? openDatabase(config.databasePath);
   const ownsDatabase = options.database === undefined;
   const rateLimiter = options.rateLimiter ?? new DiscussionRateLimiter({
     cooldownSeconds: config.discussionCooldownSeconds,
-    now: options.now
+    now
   });
-  const nicknameFactory = options.nicknameFactory ?? randomNickname;
+  const registrationLimiter = options.registrationLimiter ?? new DiscussionRateLimiter({
+    cooldownSeconds: config.authCooldownSeconds,
+    now
+  });
+  const loginLimiter = options.loginLimiter ?? new DiscussionRateLimiter({
+    cooldownSeconds: config.authCooldownSeconds,
+    now
+  });
+  database.cleanupExpiredSessions?.(nowIso());
 
   const app = express();
   app.disable('x-powered-by');
@@ -109,8 +186,111 @@ export function createApp(options = {}) {
     immutable: true,
     maxAge: '1y'
   }));
+  app.use('/assets/mathlive', express.static(path.join(projectRoot, 'node_modules', 'mathlive'), {
+    fallthrough: false,
+    immutable: true,
+    maxAge: '1y'
+  }));
   app.use(express.json({ limit: '32kb' }));
   app.use(express.urlencoded({ extended: false, limit: '32kb' }));
+
+  const cookieMaxAgeSeconds = Math.floor(config.sessionTtlMs / 1000);
+  const setCsrfCookie = (response, csrfToken) => {
+    appendCookie(response, cookieValue(CSRF_COOKIE, csrfToken, {
+      maxAgeSeconds: cookieMaxAgeSeconds,
+      secure: config.sessionCookieSecure
+    }));
+  };
+  const setSessionCookie = (response, sessionToken) => {
+    appendCookie(response, cookieValue(SESSION_COOKIE, sessionToken, {
+      maxAgeSeconds: cookieMaxAgeSeconds,
+      secure: config.sessionCookieSecure
+    }));
+  };
+  const clearAuthCookies = (response) => {
+    appendCookie(response, cookieValue(SESSION_COOKIE, '', {
+      maxAgeSeconds: 0,
+      secure: config.sessionCookieSecure
+    }));
+    appendCookie(response, cookieValue(CSRF_COOKIE, '', {
+      maxAgeSeconds: 0,
+      secure: config.sessionCookieSecure
+    }));
+  };
+  const createLoginSession = (response, user) => {
+    const sessionToken = generateSessionToken();
+    const csrfToken = generateCsrfToken();
+    const createdAt = nowIso();
+    const expiresAt = new Date(now() + config.sessionTtlMs).toISOString();
+    database.cleanupExpiredSessions?.(createdAt);
+    database.createSession({
+      tokenHash: hashSessionToken(sessionToken),
+      userId: user.id,
+      csrfTokenHash: hashCsrfToken(csrfToken),
+      createdAt,
+      expiresAt
+    });
+    setSessionCookie(response, sessionToken);
+    setCsrfCookie(response, csrfToken);
+  };
+
+  app.use((request, response, next) => {
+    try {
+      const rawSessionToken = readCookie(request, SESSION_COOKIE);
+      const session = usableOpaqueToken(rawSessionToken)
+        ? database.findSessionByTokenHash(hashSessionToken(rawSessionToken), nowIso())
+        : null;
+      if (rawSessionToken && !session) clearAuthCookies(response);
+
+      request.authSession = session;
+      request.currentUser = session?.user ?? null;
+      let csrfToken = rawSessionToken && !session ? null : readCookie(request, CSRF_COOKIE);
+      const csrfMatchesSession = session
+        && usableOpaqueToken(csrfToken)
+        && verifyCsrfToken(csrfToken, session.csrfTokenHash);
+
+      if (session && !csrfMatchesSession) {
+        csrfToken = generateCsrfToken();
+        database.updateSessionCsrfToken(session.tokenHash, hashCsrfToken(csrfToken));
+        request.authSession = { ...session, csrfTokenHash: hashCsrfToken(csrfToken) };
+        setCsrfCookie(response, csrfToken);
+      } else if (!session && !usableOpaqueToken(csrfToken)) {
+        csrfToken = generateCsrfToken();
+        setCsrfCookie(response, csrfToken);
+      }
+
+      request.csrfToken = csrfToken;
+      response.locals.currentUser = request.currentUser;
+      response.locals.csrfToken = csrfToken;
+      // Dynamic pages contain user-specific navigation and CSRF form tokens.
+      // Media responses explicitly replace this with their public cache policy.
+      response.set('Cache-Control', 'no-store');
+      next();
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  const assertCsrf = (request) => {
+    const supplied = request.body?._csrf ?? request.get('x-csrf-token');
+    const expectedHash = request.authSession?.csrfTokenHash ?? hashCsrfToken(request.csrfToken ?? '');
+    if (!verifyCsrfToken(supplied, expectedHash)) {
+      throw new AppError('页面凭证已失效，请刷新后重试', 403, 'INVALID_CSRF_TOKEN');
+    }
+  };
+
+  const requireAuthentication = (request, response, next) => {
+    if (request.currentUser) {
+      next();
+      return;
+    }
+    if (wantsJson(request)) {
+      response.status(401).json({ error: '请先登录后再继续' });
+      return;
+    }
+    const nextPath = safeNextPath(request.originalUrl);
+    response.redirect(303, `/login?next=${encodeURIComponent(nextPath)}`);
+  };
 
   const upload = multer({
     storage: multer.diskStorage({
@@ -123,6 +303,145 @@ export function createApp(options = {}) {
       fields: 8,
       fieldNameSize: 64,
       fieldSize: 32 * 1024
+    }
+  });
+
+  const renderAuthError = (response, view, status, error, form, nextPath = '/') => {
+    response.status(status).render(view, {
+      form,
+      error,
+      nextPath: safeNextPath(nextPath)
+    });
+  };
+
+  app.get('/register', (request, response) => {
+    if (request.currentUser) {
+      response.redirect(303, '/');
+      return;
+    }
+    response.render('register', {
+      form: {},
+      error: '',
+      nextPath: safeNextPath(request.query.next)
+    });
+  });
+
+  app.post('/register', async (request, response, next) => {
+    const nextPath = safeNextPath(request.body?.next);
+    try {
+      if (request.currentUser) {
+        response.redirect(303, nextPath);
+        return;
+      }
+      assertCsrf(request);
+      const clientIp = getClientIp(request, config.clientIpMode);
+      const limit = registrationLimiter.check(clientIp);
+      if (!limit.allowed) {
+        response.set('Retry-After', String(limit.retryAfterSeconds));
+        renderAuthError(
+          response,
+          'register',
+          429,
+          `操作得有点快，请在 ${limit.retryAfterSeconds} 秒后再试。`,
+          request.body,
+          nextPath
+        );
+        return;
+      }
+      registrationLimiter.consume(clientIp);
+      const fields = validateRegistrationFields(request.body);
+      if (database.findUserByUsername(fields.username)) {
+        renderAuthError(response, 'register', 409, '这个用户名已经被使用', request.body, nextPath);
+        return;
+      }
+      const user = database.createUser({
+        id: crypto.randomUUID(),
+        username: fields.username,
+        displayName: fields.displayName,
+        passwordHash: await hashPassword(fields.password),
+        createdAt: nowIso()
+      });
+      createLoginSession(response, user);
+      response.redirect(303, nextPath);
+    } catch (error) {
+      if (error instanceof AppError) {
+        renderAuthError(response, 'register', error.status, error.message, request.body ?? {}, nextPath);
+        return;
+      }
+      if (String(error?.code).startsWith('SQLITE_CONSTRAINT')) {
+        renderAuthError(response, 'register', 409, '这个用户名已经被使用', request.body ?? {}, nextPath);
+        return;
+      }
+      next(error);
+    }
+  });
+
+  app.get('/login', (request, response) => {
+    if (request.currentUser) {
+      response.redirect(303, '/');
+      return;
+    }
+    response.render('login', {
+      form: {},
+      error: '',
+      nextPath: safeNextPath(request.query.next)
+    });
+  });
+
+  app.post('/login', async (request, response, next) => {
+    const nextPath = safeNextPath(request.body?.next);
+    try {
+      if (request.currentUser) {
+        response.redirect(303, nextPath);
+        return;
+      }
+      assertCsrf(request);
+      const clientIp = getClientIp(request, config.clientIpMode);
+      const limit = loginLimiter.check(clientIp);
+      if (!limit.allowed) {
+        response.set('Retry-After', String(limit.retryAfterSeconds));
+        renderAuthError(
+          response,
+          'login',
+          429,
+          `操作得有点快，请在 ${limit.retryAfterSeconds} 秒后再试。`,
+          request.body,
+          nextPath
+        );
+        return;
+      }
+      loginLimiter.consume(clientIp);
+      const fields = validateLoginFields(request.body);
+      const user = database.findUserByUsername(fields.username);
+      const passwordMatches = user
+        ? await verifyPassword(fields.password, user.passwordHash)
+        : await hashPassword(fields.password).then(() => false);
+      if (!user || !passwordMatches) {
+        renderAuthError(response, 'login', 401, '用户名或密码不正确', request.body, nextPath);
+        return;
+      }
+      createLoginSession(response, user);
+      response.redirect(303, nextPath);
+    } catch (error) {
+      if (error instanceof AppError) {
+        renderAuthError(response, 'login', error.status, error.message, request.body ?? {}, nextPath);
+        return;
+      }
+      next(error);
+    }
+  });
+
+  app.post('/logout', (request, response, next) => {
+    try {
+      assertCsrf(request);
+      const rawSessionToken = readCookie(request, SESSION_COOKIE);
+      if (usableOpaqueToken(rawSessionToken)) {
+        database.revokeSession(hashSessionToken(rawSessionToken));
+      }
+      clearAuthCookies(response);
+      response.redirect(303, '/');
+    } catch (error) {
+      next(error);
     }
   });
 
@@ -147,11 +466,11 @@ export function createApp(options = {}) {
     }
   });
 
-  app.get('/upload', (_request, response) => {
+  app.get('/upload', requireAuthentication, (_request, response) => {
     response.render('upload', { form: {}, error: '', maxUploadMb: config.maxUploadMb });
   });
 
-  app.post('/videos', (request, response, next) => {
+  app.post('/videos', requireAuthentication, (request, response, next) => {
     upload.single('video')(request, response, async (uploadError) => {
       let temporaryPath = request.file?.path;
       let finalPath;
@@ -164,6 +483,7 @@ export function createApp(options = {}) {
             uploadError.code ?? 'UPLOAD_ERROR'
           );
         }
+        assertCsrf(request);
         const fields = validateVideoFields(request.body);
         if (!request.file) throw new ValidationError('请选择一个 MP4 视频文件', 'VIDEO_REQUIRED');
         validateMp4Metadata(request.file.originalname, request.file.mimetype);
@@ -179,13 +499,14 @@ export function createApp(options = {}) {
         try {
           database.insertVideo({
             id,
+            userId: request.currentUser.id,
             ...fields,
             licenseCode: license.id,
             storageName,
             originalFilename: request.file.originalname,
             mediaType: 'video/mp4',
             byteSize: request.file.size,
-            createdAt: new Date().toISOString()
+            createdAt: nowIso()
           });
         } catch (error) {
           await safeUnlink(finalPath);
@@ -246,7 +567,9 @@ export function createApp(options = {}) {
       response.set({
         'Accept-Ranges': 'bytes',
         'Content-Type': 'video/mp4',
-        'Cache-Control': 'public, max-age=3600'
+        'Cache-Control': response.hasHeader('Set-Cookie')
+          ? 'private, no-store'
+          : 'public, max-age=3600'
       });
       if (requestedRange === false) {
         response.status(416).set({ 'Content-Range': `bytes */${size}`, 'Content-Length': '0' }).end();
@@ -295,19 +618,24 @@ export function createApp(options = {}) {
     }
   });
 
-  app.post('/videos/:id/discussions', (request, response, next) => {
+  app.post('/videos/:id/discussions', requireAuthentication, (request, response, next) => {
     try {
+      assertCsrf(request);
       const video = database.getVideo(request.params.id);
       if (!video) throw new AppError('找不到这段视频', 404, 'VIDEO_NOT_FOUND');
       const bodyMarkdown = validateDiscussionBody(request.body?.body);
       renderMarkdown(bodyMarkdown);
       const clientIp = getClientIp(request, config.clientIpMode);
-      const limit = rateLimiter.check(clientIp);
-      if (!limit.allowed) {
-        const message = `发布得有点快，请在 ${limit.retryAfterSeconds} 秒后再试。`;
-        response.set('Retry-After', String(limit.retryAfterSeconds));
+      const limits = [
+        rateLimiter.check(`ip:${clientIp}`),
+        rateLimiter.check(`user:${request.currentUser.id}`)
+      ];
+      const retryAfterSeconds = Math.max(...limits.map((limit) => limit.retryAfterSeconds));
+      if (limits.some((limit) => !limit.allowed)) {
+        const message = `发布得有点快，请在 ${retryAfterSeconds} 秒后再试。`;
+        response.set('Retry-After', String(retryAfterSeconds));
         if (wantsJson(request)) {
-          response.status(429).json({ error: message, retryAfterSeconds: limit.retryAfterSeconds });
+          response.status(429).json({ error: message, retryAfterSeconds });
           return;
         }
         const discussions = database.listDiscussions(video.id).map(discussionView);
@@ -323,11 +651,13 @@ export function createApp(options = {}) {
 
       const discussion = database.insertDiscussion({
         videoId: video.id,
-        nickname: nicknameFactory(),
+        userId: request.currentUser.id,
+        nickname: request.currentUser.displayName,
         bodyMarkdown,
-        createdAt: new Date().toISOString()
+        createdAt: nowIso()
       });
-      rateLimiter.consume(clientIp);
+      rateLimiter.consume(`ip:${clientIp}`);
+      rateLimiter.consume(`user:${request.currentUser.id}`);
 
       if (wantsJson(request)) {
         response.status(201).json({

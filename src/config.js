@@ -6,6 +6,9 @@ const DEFAULTS = Object.freeze({
   VIDEO_STORAGE_PATH: './data/videos',
   MAX_UPLOAD_MB: '90',
   DISCUSSION_COOLDOWN_SECONDS: '30',
+  SESSION_TTL_HOURS: '168',
+  SESSION_COOKIE_SECURE: 'false',
+  AUTH_COOLDOWN_SECONDS: '2',
   CLIENT_IP_MODE: 'direct'
 });
 
@@ -38,6 +41,13 @@ function positiveNumber(value, name, maximum = Number.MAX_SAFE_INTEGER) {
   return parsed;
 }
 
+function booleanValue(value, name) {
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === 'true') return true;
+  if (normalized === 'false') return false;
+  throw new Error(`配置 ${name} 必须是 true 或 false`);
+}
+
 export function loadConfig(env = process.env, cwd = process.cwd()) {
   const read = (key) => env[key] ?? DEFAULTS[key];
   const port = positiveInteger(read('PORT'), 'PORT', 65535);
@@ -45,6 +55,9 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
   const videoStoragePath = path.resolve(cwd, requiredText(read('VIDEO_STORAGE_PATH'), 'VIDEO_STORAGE_PATH'));
   const maxUploadMb = positiveNumber(read('MAX_UPLOAD_MB'), 'MAX_UPLOAD_MB');
   const cooldownSeconds = positiveInteger(read('DISCUSSION_COOLDOWN_SECONDS'), 'DISCUSSION_COOLDOWN_SECONDS');
+  const sessionTtlHours = positiveInteger(read('SESSION_TTL_HOURS'), 'SESSION_TTL_HOURS', 8760);
+  const sessionCookieSecure = booleanValue(read('SESSION_COOKIE_SECURE'), 'SESSION_COOKIE_SECURE');
+  const authCooldownSeconds = positiveInteger(read('AUTH_COOLDOWN_SECONDS'), 'AUTH_COOLDOWN_SECONDS', 3600);
   const clientIpMode = requiredText(read('CLIENT_IP_MODE'), 'CLIENT_IP_MODE');
 
   if (!['direct', 'cloudflare'].includes(clientIpMode)) {
@@ -64,6 +77,10 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
     maxUploadMb,
     maxUploadBytes,
     discussionCooldownSeconds: cooldownSeconds,
+    sessionTtlHours,
+    sessionTtlMs: sessionTtlHours * 60 * 60 * 1000,
+    sessionCookieSecure,
+    authCooldownSeconds,
     clientIpMode
   });
 }

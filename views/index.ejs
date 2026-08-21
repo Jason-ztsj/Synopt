@@ -1,5 +1,5 @@
 <%- include('partials/head', {
-  pageTitle: '共映｜开放的非营利视频共同体',
+  pageTitle: '同见｜开放的非营利视频共同体',
   pageDescription: '发现并分享采用开放许可的视频作品，在清晰授权下观看、使用和讨论。'
 }) %>
 <body class="page page--home">
@@ -11,18 +11,18 @@
       <div class="hero__copy">
         <p class="eyebrow"><span></span> 一个由作品连接的公共空间</p>
         <h1 id="hero-title">让影像自由流动，<br><em>让创作彼此照亮。</em></h1>
-        <p class="hero__lede">上传你愿意开放分享的视频，选定清晰的知识共享许可；无需账号，也没有推荐算法。</p>
+        <p class="hero__lede">上传你愿意开放分享的视频，选定清晰的知识共享许可；用稳定身份参与讨论，不被推荐算法左右。</p>
         <div class="hero__actions">
           <a class="button button--primary" href="/upload">发布一段影像 <span aria-hidden="true">↗</span></a>
           <a class="text-link" href="#latest-videos">看看大家的作品 <span aria-hidden="true">↓</span></a>
         </div>
       </div>
-      <aside class="hero__manifesto" aria-label="共映原则">
+      <aside class="hero__manifesto" aria-label="同见原则">
         <p class="hero__manifesto-label">共同约定 / COMMON GROUND</p>
         <ol>
           <li><span>01</span><p><strong>创作者保有选择</strong><small>每段影像都有明确许可</small></p></li>
           <li><span>02</span><p><strong>观看不被计算</strong><small>没有关注数与推荐流</small></p></li>
-          <li><span>03</span><p><strong>讨论回到内容</strong><small>匿名、克制且平等</small></p></li>
+          <li><span>03</span><p><strong>讨论回到内容</strong><small>持续、克制且平等</small></p></li>
         </ol>
       </aside>
     </section>
@@ -31,7 +31,7 @@
       <header class="section-heading">
         <div>
           <p class="eyebrow"><span></span> 最近发布</p>
-          <h2 id="latest-title">正在共映</h2>
+          <h2 id="latest-title">共同观看</h2>
         </div>
         <% if (Array.isArray(videos) && videos.length > 0) { %>
           <p class="section-heading__count"><strong><%= videos.length %></strong> 段公开影像</p>
@@ -68,6 +68,9 @@
                 : new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'short', day: 'numeric' }).format(parsedDate);
             }
             const description = typeof video.description === 'string' ? video.description.trim() : '';
+            const accountDisplayName = video.accountDisplayName || video.account_display_name || video.uploaderDisplayName || video.uploader_display_name || '';
+            const accountUsername = video.accountUsername || video.account_username || video.uploaderUsername || video.uploader_username || '';
+            const accountLabel = accountDisplayName || accountUsername;
           %>
             <article class="video-card">
               <a class="video-card__visual" href="/videos/<%= videoId %>" aria-label="播放《<%= video.title %>》">
@@ -83,6 +86,9 @@
                 </div>
                 <h3><a href="/videos/<%= videoId %>"><%= video.title %></a></h3>
                 <p class="video-card__creator">由 <strong><%= video.creator %></strong> 创作</p>
+                <% if (accountLabel) { %>
+                  <p class="video-card__account">由 <strong><%= accountLabel %></strong><% if (accountUsername && accountUsername !== accountLabel) { %> <span>@<%= accountUsername %></span><% } %> 发布</p>
+                <% } %>
                 <% if (description) { %><p class="video-card__description"><%= description %></p><% } %>
                 <a class="video-card__watch" href="/videos/<%= videoId %>">观看与讨论 <span aria-hidden="true">→</span></a>
               </div>
@@ -93,10 +99,10 @@
     </section>
 
     <section class="principles shell" aria-labelledby="principles-title">
-      <p class="eyebrow"><span></span> 为什么是共映</p>
+      <p class="eyebrow"><span></span> 为什么是同见</p>
       <h2 id="principles-title">分享，不必交换隐私。</h2>
       <div class="principles__grid">
-        <article><span aria-hidden="true">◎</span><h3>没有账号</h3><p>上传与讨论都无需注册。我们只保留作品、署名和讨论正文。</p></article>
+        <article><span aria-hidden="true">◎</span><h3>稳定身份</h3><p>观看始终开放；注册后使用持续账号发布与回应，不要求真实姓名。</p></article>
         <article><span aria-hidden="true">◇</span><h3>许可先行</h3><p>五种开放许可一目了然，让创作者与使用者都知道边界。</p></article>
         <article><span aria-hidden="true">∿</span><h3>原样播放</h3><p>视频不经转码与改造，以你发布的 MP4 文件直接呈现。</p></article>
       </div>

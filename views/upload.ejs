@@ -12,7 +12,7 @@
         code: 'CC0 1.0',
         name: 'CC0 1.0 通用（公共领域贡献）',
         description: '你在法律允许的范围内尽可能放弃版权及相关权利。任何人都可以复制、修改、传播和使用，无需署名。',
-        note: '共映仍会展示创作者名称，但作品使用者无需署名。',
+        note: '同见仍会展示创作者名称，但作品使用者无需署名。',
         url: 'https://creativecommons.org/publicdomain/zero/1.0/deed.zh-hans'
       }
     : nonCommercialChecked && noDerivativesChecked
@@ -48,10 +48,15 @@
             };
   const safeError = typeof error !== 'undefined' ? error : null;
   const errorMessage = typeof safeError === 'string' ? safeError : (safeError && safeError.message ? safeError.message : '');
+  const uploadUser = typeof currentUser !== 'undefined' && currentUser && typeof currentUser === 'object' ? currentUser : null;
+  const uploadDisplayName = uploadUser ? (uploadUser.displayName || uploadUser.display_name || uploadUser.username || '用户') : '';
+  const uploadUsername = uploadUser ? (uploadUser.username || '') : '';
+  const uploadAvatar = Array.from(String(uploadDisplayName))[0] || '用';
+  const safeCsrfToken = typeof csrfToken === 'string' ? csrfToken : '';
 %>
 <%- include('partials/head', {
-  pageTitle: '发布视频｜共映',
-  pageDescription: '向共映发布采用开放许可的 MP4 视频。'
+  pageTitle: '发布视频｜同见',
+  pageDescription: '向同见发布采用开放许可的 MP4 视频。'
 }) %>
 <body class="page page--upload">
   <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -62,7 +67,7 @@
       <a class="back-link" href="/"><span aria-hidden="true">←</span> 返回放映室</a>
       <p class="eyebrow"><span></span> 发布开放影像</p>
       <h1>把你的画面，<br><em>交给更远的目光。</em></h1>
-      <p>只需填写作品信息、选择开放许可并上传 MP4。我们不创建账号，也不会对视频转码。</p>
+      <p>填写作品信息、选择开放许可并上传 MP4。作品会关联到你的账号，视频仍以原文件直接播放，不经转码。</p>
     </header>
 
     <% if (errorMessage) { %>
@@ -73,6 +78,13 @@
     <% } %>
 
     <form class="upload-form" action="/videos" method="post" enctype="multipart/form-data" data-upload-form>
+      <input type="hidden" name="_csrf" value="<%= safeCsrfToken %>">
+      <% if (uploadUser) { %>
+        <div class="signed-in-note" role="status">
+          <span class="signed-in-note__avatar" aria-hidden="true"><%= uploadAvatar %></span>
+          <p>将以 <strong><%= uploadDisplayName %></strong><% if (uploadUsername && uploadUsername !== uploadDisplayName) { %> <span>@<%= uploadUsername %></span><% } %> 的账号发布。下方“创作者署名”仍由你单独填写。</p>
+        </div>
+      <% } %>
       <noscript>
         <div class="alert alert--notice" role="status">
           <span class="alert__icon" aria-hidden="true">i</span>
@@ -93,7 +105,7 @@
           <label class="field">
             <span class="field__label">创作者署名 <i>必填</i></span>
             <input type="text" name="creator" value="<%= safeForm.creator || '' %>" maxlength="80" autocomplete="name" placeholder="个人姓名或团体名称" required>
-            <span class="field__hint">CC0 作品也会展示此名称</span>
+            <span class="field__hint">这是许可所需的作品署名，可以与你的账号显示名不同；CC0 作品也会展示</span>
           </label>
           <label class="field field--wide">
             <span class="field__label">作品描述 <small>选填</small></span>

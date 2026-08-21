@@ -6,7 +6,7 @@
       code: 'CC0 1.0',
       name: 'CC0 1.0 通用（公共领域贡献）',
       description: '你在法律允许的范围内尽可能放弃版权及相关权利。任何人都可以复制、修改、传播和使用，无需署名。',
-      note: '共映仍会展示创作者名称，但作品使用者无需署名。',
+      note: '同见仍会展示创作者名称，但作品使用者无需署名。',
       url: 'https://creativecommons.org/publicdomain/zero/1.0/deed.zh-hans'
     },
     by: {

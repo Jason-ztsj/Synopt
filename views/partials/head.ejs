@@ -5,9 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#08111f">
   <meta name="color-scheme" content="dark">
-  <meta name="description" content="<%= typeof pageDescription === 'string' ? pageDescription : '共映是一个简洁、开放、非营利的视频分享与讨论空间。' %>">
-  <title><%= typeof pageTitle === 'string' ? pageTitle : '共映' %></title>
+  <meta name="description" content="<%= typeof pageDescription === 'string' ? pageDescription : '同见是一个简洁、开放、非营利的视频分享与讨论空间。' %>">
+  <title><%= typeof pageTitle === 'string' ? pageTitle : '同见' %></title>
   <link rel="stylesheet" href="/assets/katex/katex.min.css">
   <link rel="stylesheet" href="/static/css/app.css">
+  <% if (typeof includeMathEditor !== 'undefined' && includeMathEditor) { %>
+    <link rel="stylesheet" href="/assets/mathlive/mathlive-fonts.css">
+    <link rel="stylesheet" href="/static/css/math-editor.css">
+    <script type="module" src="/static/js/math-editor.js"></script>
+  <% } %>
   <script src="/static/js/app.js" defer></script>
 </head>

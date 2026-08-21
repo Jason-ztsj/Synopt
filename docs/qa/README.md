@@ -1,4 +1,6 @@
-# 共映 MVP 验收记录
+# 同见 MVP 历史基线验收记录
+
+> 以下内容记录的是 2026-08-19 的旧版 MVP 验收。当时产品仍使用“共映”界面、匿名上传和随机讨论昵称，截图也保留了该历史状态。当前“同见”版本已加入账号、会话、CSRF 保护和本地 MathLive 公式键盘；测试数量与交互边界均已变化，应以根目录 README 的当前验收清单和最新测试结果为准。
 
 验收日期：2026-08-19（Asia/Shanghai）
 
@@ -48,4 +50,3 @@ ffmpeg 生成了 60 秒、54,142,037 字节的真实 MP4，视频为 H.264、音
 - [手机详情](mobile-detail.png)
 - [手机长公式滚动](mobile-editor-long-formula-final.png)
 - [手机许可证选择](mobile-upload-license-final.png)
-

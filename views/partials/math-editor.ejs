@@ -1,0 +1,124 @@
+<div class="formula-editor" data-formula-editor hidden>
+  <div class="formula-toolbar" data-formula-toolbar aria-label="公式工具">
+    <span class="formula-toolbar__label">公式</span>
+    <button class="formula-toolbar__button" type="button" data-formula-open="inline" aria-haspopup="dialog" aria-controls="formula-editor-dialog">
+      <span aria-hidden="true">ƒ(x)</span>
+      行内公式
+    </button>
+    <button class="formula-toolbar__button" type="button" data-formula-open="block" aria-haspopup="dialog" aria-controls="formula-editor-dialog">
+      <span aria-hidden="true">∑</span>
+      独立公式
+    </button>
+    <span class="formula-toolbar__hint">光标放在已有公式中，即可再次编辑</span>
+  </div>
+
+<dialog id="formula-editor-dialog" class="formula-dialog" data-formula-dialog aria-labelledby="formula-dialog-title" aria-describedby="formula-dialog-help">
+  <div class="formula-dialog__surface">
+    <header class="formula-dialog__header">
+      <div>
+        <p class="formula-dialog__eyebrow">VISUAL MATH EDITOR</p>
+        <h4 id="formula-dialog-title" data-formula-title>插入公式</h4>
+      </div>
+      <button class="formula-dialog__close" type="button" data-formula-cancel aria-label="关闭公式编辑器">×</button>
+    </header>
+
+    <div class="formula-mode" aria-label="公式显示方式">
+      <button type="button" data-formula-mode="inline" aria-pressed="true">行内 <code>$…$</code></button>
+      <button type="button" data-formula-mode="block" aria-pressed="false">独立成行 <code>$$…$$</code></button>
+    </div>
+
+    <div class="formula-field-wrap">
+      <div class="formula-field-host" data-formula-field-host></div>
+      <p id="formula-dialog-help" class="formula-field-wrap__hint">可以使用下方按键、实体键盘，或直接粘贴 LaTeX。结构按键会自动将光标移到第一个待填位置。</p>
+    </div>
+
+    <div class="formula-keyboard" data-formula-keyboard>
+      <div class="formula-tabs" role="tablist" aria-label="公式键盘分类">
+        <button id="formula-tab-numbers" type="button" role="tab" aria-selected="true" aria-controls="formula-panel-numbers" tabindex="0" data-formula-tab="numbers">数字</button>
+        <button id="formula-tab-operators" type="button" role="tab" aria-selected="false" aria-controls="formula-panel-operators" tabindex="-1" data-formula-tab="operators">运算</button>
+        <button id="formula-tab-structures" type="button" role="tab" aria-selected="false" aria-controls="formula-panel-structures" tabindex="-1" data-formula-tab="structures">结构</button>
+        <button id="formula-tab-greek" type="button" role="tab" aria-selected="false" aria-controls="formula-panel-greek" tabindex="-1" data-formula-tab="greek">希腊字母</button>
+      </div>
+
+      <section id="formula-panel-numbers" class="formula-key-panel" role="tabpanel" aria-labelledby="formula-tab-numbers" data-formula-panel="numbers">
+        <button type="button" data-formula-insert="7">7</button>
+        <button type="button" data-formula-insert="8">8</button>
+        <button type="button" data-formula-insert="9">9</button>
+        <button type="button" data-formula-insert="4">4</button>
+        <button type="button" data-formula-insert="5">5</button>
+        <button type="button" data-formula-insert="6">6</button>
+        <button type="button" data-formula-insert="1">1</button>
+        <button type="button" data-formula-insert="2">2</button>
+        <button type="button" data-formula-insert="3">3</button>
+        <button type="button" data-formula-insert="0">0</button>
+        <button type="button" data-formula-insert=".">.</button>
+        <button type="button" data-formula-insert=",">,</button>
+      </section>
+
+      <section id="formula-panel-operators" class="formula-key-panel" role="tabpanel" aria-labelledby="formula-tab-operators" data-formula-panel="operators" hidden>
+        <button type="button" data-formula-insert="+">+</button>
+        <button type="button" data-formula-insert="-">−</button>
+        <button type="button" data-formula-insert="\times">×</button>
+        <button type="button" data-formula-insert="\div">÷</button>
+        <button type="button" data-formula-insert="=">=</button>
+        <button type="button" data-formula-insert="\ne">≠</button>
+        <button type="button" data-formula-insert="<">&lt;</button>
+        <button type="button" data-formula-insert=">">&gt;</button>
+        <button type="button" data-formula-insert="\le">≤</button>
+        <button type="button" data-formula-insert="\ge">≥</button>
+        <button type="button" data-formula-insert="\pm">±</button>
+        <button type="button" data-formula-insert="\cdot">·</button>
+        <button type="button" data-formula-insert="(">(</button>
+        <button type="button" data-formula-insert=")">)</button>
+        <button type="button" data-formula-insert="\infty">∞</button>
+        <button type="button" data-formula-insert="\approx">≈</button>
+      </section>
+
+      <section id="formula-panel-structures" class="formula-key-panel formula-key-panel--wide" role="tabpanel" aria-labelledby="formula-tab-structures" data-formula-panel="structures" hidden>
+        <button type="button" data-formula-insert="\frac{#?}{#?}" aria-label="分数"><span aria-hidden="true">a⁄b</span><small>分数</small></button>
+        <button type="button" data-formula-insert="\sqrt{#?}" aria-label="平方根"><span aria-hidden="true">√x</span><small>根号</small></button>
+        <button type="button" data-formula-insert="^{#?}" aria-label="上标"><span aria-hidden="true">x²</span><small>上标</small></button>
+        <button type="button" data-formula-insert="_{#?}" aria-label="下标"><span aria-hidden="true">xₙ</span><small>下标</small></button>
+        <button type="button" data-formula-insert="\sqrt[#?]{#?}" aria-label="n 次根"><span aria-hidden="true">ⁿ√x</span><small>n 次根</small></button>
+        <button type="button" data-formula-insert="\left|#?\right|" aria-label="绝对值"><span aria-hidden="true">|x|</span><small>绝对值</small></button>
+        <button type="button" data-formula-insert="\sum_{#?}^{#?}#?" aria-label="求和"><span aria-hidden="true">Σ</span><small>求和</small></button>
+        <button type="button" data-formula-insert="\int_{#?}^{#?}#?\,\mathrm{d}#?" aria-label="积分"><span aria-hidden="true">∫</span><small>积分</small></button>
+      </section>
+
+      <section id="formula-panel-greek" class="formula-key-panel formula-key-panel--greek" role="tabpanel" aria-labelledby="formula-tab-greek" data-formula-panel="greek" hidden>
+        <button type="button" data-formula-insert="\alpha">α</button>
+        <button type="button" data-formula-insert="\beta">β</button>
+        <button type="button" data-formula-insert="\gamma">γ</button>
+        <button type="button" data-formula-insert="\delta">δ</button>
+        <button type="button" data-formula-insert="\epsilon">ε</button>
+        <button type="button" data-formula-insert="\theta">θ</button>
+        <button type="button" data-formula-insert="\lambda">λ</button>
+        <button type="button" data-formula-insert="\mu">μ</button>
+        <button type="button" data-formula-insert="\pi">π</button>
+        <button type="button" data-formula-insert="\rho">ρ</button>
+        <button type="button" data-formula-insert="\sigma">σ</button>
+        <button type="button" data-formula-insert="\phi">φ</button>
+        <button type="button" data-formula-insert="\omega">ω</button>
+        <button type="button" data-formula-insert="\Delta">Δ</button>
+        <button type="button" data-formula-insert="\Sigma">Σ</button>
+        <button type="button" data-formula-insert="\Omega">Ω</button>
+      </section>
+
+      <div class="formula-keyboard__actions" aria-label="公式编辑操作">
+        <button type="button" data-formula-command="undo" aria-label="撤销" title="撤销">↶</button>
+        <button type="button" data-formula-command="redo" aria-label="重做" title="重做">↷</button>
+        <button type="button" data-formula-command="moveToPreviousChar" aria-label="光标向左" title="光标向左">←</button>
+        <button type="button" data-formula-command="moveToNextChar" aria-label="光标向右" title="光标向右">→</button>
+        <button type="button" data-formula-command="deleteBackward" aria-label="退格" title="退格">⌫</button>
+        <button type="button" data-formula-command="moveToNextPlaceholder" aria-label="移到下一个待填位置" title="下一个待填位置">Tab</button>
+      </div>
+    </div>
+
+    <p class="formula-dialog__status" data-formula-status aria-live="polite"></p>
+    <footer class="formula-dialog__footer">
+      <button class="formula-dialog__secondary" type="button" data-formula-cancel>取消</button>
+      <button class="formula-dialog__primary" type="button" data-formula-commit>插入到 Markdown</button>
+    </footer>
+  </div>
+</dialog>
+</div>

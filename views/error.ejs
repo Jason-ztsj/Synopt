@@ -6,7 +6,7 @@
   const errorMessage = typeof message === 'string' ? message : (resolvedStatus === 404 ? '链接可能已经失效，或者地址有一点偏差。' : '服务暂时无法完成这个请求，请稍后再试。');
 %>
 <%- include('partials/head', {
-  pageTitle: errorTitle + '｜共映',
+  pageTitle: errorTitle + '｜同见',
   pageDescription: errorMessage
 }) %>
 <body class="page page--error">
@@ -19,7 +19,7 @@
     <h1><%= errorTitle %></h1>
     <p><%= errorMessage %></p>
     <div class="error-page__actions">
-      <a class="button button--primary" href="/">返回共映首页</a>
+      <a class="button button--primary" href="/">返回同见首页</a>
       <a class="text-link" href="/upload">发布新视频 <span aria-hidden="true">→</span></a>
     </div>
   </main>

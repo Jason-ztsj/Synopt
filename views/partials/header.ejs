@@ -1,17 +1,43 @@
-<% const activePath = typeof currentPath === 'string' ? currentPath : ''; %>
+<%
+  const activePath = typeof currentPath === 'string' ? currentPath : '';
+  const headerUser = typeof currentUser !== 'undefined' && currentUser && typeof currentUser === 'object' ? currentUser : null;
+  const headerDisplayName = headerUser ? (headerUser.displayName || headerUser.display_name || headerUser.username || '用户') : '';
+  const headerUsername = headerUser ? (headerUser.username || '') : '';
+  const headerAvatar = Array.from(String(headerDisplayName))[0] || '用';
+  const headerCsrfToken = typeof csrfToken === 'string' ? csrfToken : '';
+%>
 <header class="site-header">
   <div class="site-header__inner shell">
-    <a class="brand" href="/" aria-label="共映首页">
+    <a class="brand" href="/" aria-label="同见首页">
       <span class="brand__mark" aria-hidden="true"><span></span></span>
-      <span class="brand__word">共映</span>
+      <span class="brand__word">同见</span>
       <span class="brand__tagline">非营利视频共同体</span>
     </a>
-    <nav class="main-nav" aria-label="主导航">
-      <a href="/"<% if (activePath === '/') { %> aria-current="page"<% } %>>浏览</a>
-      <a class="main-nav__upload" href="/upload"<% if (activePath === '/upload') { %> aria-current="page"<% } %>>
-        <span aria-hidden="true">＋</span> 发布视频
-      </a>
-    </nav>
+    <div class="site-header__actions">
+      <nav class="main-nav" aria-label="主导航">
+        <a class="main-nav__browse" href="/"<% if (activePath === '/') { %> aria-current="page"<% } %>>浏览</a>
+        <a class="main-nav__upload" href="/upload"<% if (activePath === '/upload') { %> aria-current="page"<% } %>>
+          <span aria-hidden="true">＋</span> 发布视频
+        </a>
+      </nav>
+      <nav class="account-nav" aria-label="账号导航">
+        <% if (headerUser) { %>
+          <span class="account-chip" title="已登录<% if (headerUsername) { %>：@<%= headerUsername %><% } %>">
+            <span class="account-chip__avatar" aria-hidden="true"><%= headerAvatar %></span>
+            <span class="account-chip__copy">
+              <strong><%= headerDisplayName %></strong>
+              <% if (headerUsername && headerUsername !== headerDisplayName) { %><small>@<%= headerUsername %></small><% } %>
+            </span>
+          </span>
+          <form class="account-nav__logout-form" action="/logout" method="post">
+            <input type="hidden" name="_csrf" value="<%= headerCsrfToken %>">
+            <button class="account-nav__logout" type="submit">退出</button>
+          </form>
+        <% } else { %>
+          <a class="account-nav__login" href="/login"<% if (activePath === '/login') { %> aria-current="page"<% } %>>登录</a>
+          <a class="account-nav__register" href="/register"<% if (activePath === '/register') { %> aria-current="page"<% } %>>注册</a>
+        <% } %>
+      </nav>
+    </div>
   </div>
 </header>
-
