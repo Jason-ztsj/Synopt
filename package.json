@@ -1,0 +1,24 @@
+{
+  "name": "gongying-video-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "共映：简洁、开放、非营利的视频分享与讨论平台 MVP",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test --test-concurrency=1",
+    "test:unit": "node --test --test-concurrency=1 test/unit/*.test.js",
+    "test:integration": "node --test --test-concurrency=1 test/integration/*.test.js"
+  },
+  "dependencies": {
+    "ejs": "^3.1.10",
+    "express": "^5.1.0",
+    "katex": "^0.16.22",
+    "markdown-it": "^14.1.0",
+    "multer": "^2.0.2"
+  }
+}

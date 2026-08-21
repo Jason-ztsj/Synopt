@@ -1,0 +1,178 @@
+<%
+  const safeForm = typeof form !== 'undefined' && form && typeof form === 'object' ? form : {};
+  const hasSubmittedValues = Object.keys(safeForm).length > 0;
+  const truthyCheckbox = function(value) {
+    return value === true || value === 'true' || value === 'on' || value === '1' || value === 1;
+  };
+  const attributionChecked = hasSubmittedValues ? truthyCheckbox(safeForm.attribution) : true;
+  const nonCommercialChecked = attributionChecked && truthyCheckbox(safeForm.nonCommercial);
+  const noDerivativesChecked = attributionChecked && truthyCheckbox(safeForm.noDerivatives);
+  const initialLicense = !attributionChecked
+    ? {
+        code: 'CC0 1.0',
+        name: 'CC0 1.0 通用（公共领域贡献）',
+        description: '你在法律允许的范围内尽可能放弃版权及相关权利。任何人都可以复制、修改、传播和使用，无需署名。',
+        note: '共映仍会展示创作者名称，但作品使用者无需署名。',
+        url: 'https://creativecommons.org/publicdomain/zero/1.0/deed.zh-hans'
+      }
+    : nonCommercialChecked && noDerivativesChecked
+      ? {
+          code: 'CC BY-NC-ND 4.0',
+          name: '知识共享 署名—非商业性使用—禁止演绎 4.0',
+          description: '他人可以复制和传播原作，但必须标明创作者，不得用于商业目的，也不得修改作品。',
+          note: '只允许非商业地原样分享，并须保留署名。',
+          url: 'https://creativecommons.org/licenses/by-nc-nd/4.0/deed.zh-hans'
+        }
+      : nonCommercialChecked
+        ? {
+            code: 'CC BY-NC 4.0',
+            name: '知识共享 署名—非商业性使用 4.0',
+            description: '他人可以复制、传播和修改作品，但必须标明创作者，且不得用于商业目的。',
+            note: '允许再创作，不允许商业使用。',
+            url: 'https://creativecommons.org/licenses/by-nc/4.0/deed.zh-hans'
+          }
+        : noDerivativesChecked
+          ? {
+              code: 'CC BY-ND 4.0',
+              name: '知识共享 署名—禁止演绎 4.0',
+              description: '他人可以复制和传播原作，包括用于商业目的，但必须标明创作者且不得修改作品。',
+              note: '允许商业使用，但只可原样分享。',
+              url: 'https://creativecommons.org/licenses/by-nd/4.0/deed.zh-hans'
+            }
+          : {
+              code: 'CC BY 4.0',
+              name: '知识共享 署名 4.0 国际许可协议',
+              description: '他人可以复制、传播、修改并将作品用于商业用途，但必须标明创作者。',
+              note: '发布后，请在使用作品时保留创作者署名。',
+              url: 'https://creativecommons.org/licenses/by/4.0/deed.zh-hans'
+            };
+  const safeError = typeof error !== 'undefined' ? error : null;
+  const errorMessage = typeof safeError === 'string' ? safeError : (safeError && safeError.message ? safeError.message : '');
+%>
+<%- include('partials/head', {
+  pageTitle: '发布视频｜共映',
+  pageDescription: '向共映发布采用开放许可的 MP4 视频。'
+}) %>
+<body class="page page--upload">
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  <%- include('partials/header', { currentPath: '/upload' }) %>
+
+  <main id="main-content" class="shell upload-layout" tabindex="-1">
+    <header class="page-intro">
+      <a class="back-link" href="/"><span aria-hidden="true">←</span> 返回放映室</a>
+      <p class="eyebrow"><span></span> 发布开放影像</p>
+      <h1>把你的画面，<br><em>交给更远的目光。</em></h1>
+      <p>只需填写作品信息、选择开放许可并上传 MP4。我们不创建账号，也不会对视频转码。</p>
+    </header>
+
+    <% if (errorMessage) { %>
+      <div class="alert alert--error" role="alert">
+        <span class="alert__icon" aria-hidden="true">!</span>
+        <div><strong>暂时无法发布</strong><p><%= errorMessage %></p></div>
+      </div>
+    <% } %>
+
+    <form class="upload-form" action="/videos" method="post" enctype="multipart/form-data" data-upload-form>
+      <noscript>
+        <div class="alert alert--notice" role="status">
+          <span class="alert__icon" aria-hidden="true">i</span>
+          <div><strong>许可证预览需要 JavaScript</strong><p>关闭脚本时，勾选项不会即时更新下方预览；最终规则不变：取消“署名”即按 CC0 1.0 发布，并忽略“非商业”和“禁止演绎”。</p></div>
+        </div>
+      </noscript>
+      <section class="form-section" aria-labelledby="work-info-title">
+        <div class="form-section__heading">
+          <span class="step-number">01</span>
+          <div><h2 id="work-info-title">作品信息</h2><p>让观看者知道这是谁的作品，以及它讲述什么。</p></div>
+        </div>
+        <div class="field-grid">
+          <label class="field field--wide">
+            <span class="field__label">视频标题 <i>必填</i></span>
+            <input type="text" name="title" value="<%= safeForm.title || '' %>" maxlength="120" autocomplete="off" placeholder="例如：河流经过我们的村庄" required>
+            <span class="field__hint">最多 120 个字符</span>
+          </label>
+          <label class="field">
+            <span class="field__label">创作者署名 <i>必填</i></span>
+            <input type="text" name="creator" value="<%= safeForm.creator || '' %>" maxlength="80" autocomplete="name" placeholder="个人姓名或团体名称" required>
+            <span class="field__hint">CC0 作品也会展示此名称</span>
+          </label>
+          <label class="field field--wide">
+            <span class="field__label">作品描述 <small>选填</small></span>
+            <textarea name="description" maxlength="2000" rows="5" placeholder="说说拍摄背景、内容或你希望观众留意的细节……"><%= safeForm.description || '' %></textarea>
+            <span class="field__hint">纯文本，最多 2,000 个字符</span>
+          </label>
+        </div>
+      </section>
+
+      <section class="form-section" aria-labelledby="license-title" data-license-picker>
+        <div class="form-section__heading">
+          <span class="step-number">02</span>
+          <div><h2 id="license-title">开放许可</h2><p>许可决定他人怎样使用作品。你仍然保有作品的版权。</p></div>
+        </div>
+
+        <fieldset class="license-options">
+          <legend class="visually-hidden">选择知识共享许可条件</legend>
+          <label class="check-card check-card--primary">
+            <input type="checkbox" name="attribution"<% if (attributionChecked) { %> checked<% } %>>
+            <span class="check-card__control" aria-hidden="true"></span>
+            <span class="check-card__copy"><strong>署名</strong><small>使用者必须标明创作者</small></span>
+            <span class="check-card__code">BY</span>
+          </label>
+          <div class="license-options__secondary">
+            <label class="check-card">
+              <input type="checkbox" name="nonCommercial"<% if (nonCommercialChecked) { %> checked<% } %><% if (!attributionChecked) { %> disabled<% } %>>
+              <span class="check-card__control" aria-hidden="true"></span>
+              <span class="check-card__copy"><strong>非商业</strong><small>不得用于商业目的</small></span>
+              <span class="check-card__code">NC</span>
+            </label>
+            <label class="check-card">
+              <input type="checkbox" name="noDerivatives"<% if (noDerivativesChecked) { %> checked<% } %><% if (!attributionChecked) { %> disabled<% } %>>
+              <span class="check-card__control" aria-hidden="true"></span>
+              <span class="check-card__copy"><strong>禁止演绎</strong><small>不得修改或再创作</small></span>
+              <span class="check-card__code">ND</span>
+            </label>
+          </div>
+        </fieldset>
+
+        <div class="license-preview" data-license-preview aria-live="polite">
+          <div class="license-preview__topline">
+            <span>你选择的许可</span>
+            <strong data-license-code><%= initialLicense.code %></strong>
+          </div>
+          <h3 data-license-name><%= initialLicense.name %></h3>
+          <p data-license-description><%= initialLicense.description %></p>
+          <p class="license-preview__note" data-license-note><%= initialLicense.note %></p>
+          <a href="<%= initialLicense.url %>" data-license-link target="_blank" rel="license noopener">阅读官方许可文本 <span aria-hidden="true">↗</span></a>
+        </div>
+      </section>
+
+      <section class="form-section" aria-labelledby="video-file-title">
+        <div class="form-section__heading">
+          <span class="step-number">03</span>
+          <div><h2 id="video-file-title">视频文件</h2><p>请上传浏览器可以直接播放的 MP4 文件。</p></div>
+        </div>
+        <label class="file-drop" data-file-drop>
+          <input type="file" name="video" accept="video/mp4,.mp4" required data-file-input>
+          <span class="file-drop__icon" aria-hidden="true">↑</span>
+          <span class="file-drop__copy">
+            <strong data-file-title>选择一个 MP4 文件</strong>
+            <small data-file-detail>点击浏览文件 · 最大 <%= typeof maxUploadMb !== 'undefined' ? maxUploadMb : 90 %> MiB</small>
+          </span>
+          <span class="file-drop__action">选择文件</span>
+        </label>
+        <div class="format-note">
+          <span aria-hidden="true">i</span>
+          <p><strong>关于播放兼容性</strong>平台不会转码或检查视频编码。建议使用 H.264 视频与 AAC 音频，确保大多数手机和浏览器可以播放。</p>
+        </div>
+      </section>
+
+      <div class="form-submit">
+        <p>点击发布即表示你有权按所选许可分享此作品。</p>
+        <button class="button button--primary button--large" type="submit" data-submit-button>确认并发布 <span aria-hidden="true">→</span></button>
+        <p class="submit-status" data-upload-status aria-live="polite"></p>
+      </div>
+    </form>
+  </main>
+
+  <%- include('partials/footer') %>
+</body>
+</html>

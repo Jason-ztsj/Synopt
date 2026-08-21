@@ -1,0 +1,16 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+node_modules
+npm-debug.log*
+coverage
+data
+screenshots
+test-results
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.mp4
+.DS_Store

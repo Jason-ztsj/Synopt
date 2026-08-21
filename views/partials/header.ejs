@@ -1,0 +1,17 @@
+<% const activePath = typeof currentPath === 'string' ? currentPath : ''; %>
+<header class="site-header">
+  <div class="site-header__inner shell">
+    <a class="brand" href="/" aria-label="共映首页">
+      <span class="brand__mark" aria-hidden="true"><span></span></span>
+      <span class="brand__word">共映</span>
+      <span class="brand__tagline">非营利视频共同体</span>
+    </a>
+    <nav class="main-nav" aria-label="主导航">
+      <a href="/"<% if (activePath === '/') { %> aria-current="page"<% } %>>浏览</a>
+      <a class="main-nav__upload" href="/upload"<% if (activePath === '/upload') { %> aria-current="page"<% } %>>
+        <span aria-hidden="true">＋</span> 发布视频
+      </a>
+    </nav>
+  </div>
+</header>
+

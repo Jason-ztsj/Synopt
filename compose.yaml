@@ -1,0 +1,35 @@
+services:
+  app:
+    build:
+      context: .
+    image: gongying-video-mvp:local
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:${PORT:-3000}:${PORT:-3000}"
+    environment:
+      NODE_ENV: production
+      PORT: "${PORT:-3000}"
+      DATABASE_PATH: /app/data/gongying.sqlite
+      VIDEO_STORAGE_PATH: /app/data/videos
+      MAX_UPLOAD_MB: "${MAX_UPLOAD_MB:-90}"
+      DISCUSSION_COOLDOWN_SECONDS: "${DISCUSSION_COOLDOWN_SECONDS:-30}"
+      CLIENT_IP_MODE: "${CLIENT_IP_MODE:-direct}"
+    volumes:
+      - ./data:/app/data
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:' + (process.env.PORT || '3000') + '/healthz')
+          .then((response) => { if (!response.ok) process.exit(1); })
+          .catch(() => process.exit(1));
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    stop_grace_period: 15s
