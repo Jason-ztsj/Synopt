@@ -11,6 +11,10 @@ npm-debug.log*
 *.sqlite-shm
 *.sqlite-wal
 *.mp4
+*.m4v
+*.mov
+*.mkv
+*.webm
 .DS_Store
 .idea/
 .vscode/

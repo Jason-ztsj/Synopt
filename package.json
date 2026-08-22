@@ -10,6 +10,8 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
+    "validator": "node src/validator-worker.js",
+    "validator:once": "node src/validator-worker.js --once",
     "test": "node --test --test-concurrency=1",
     "test:unit": "node --test --test-concurrency=1 test/unit/*.test.js",
     "test:integration": "node --test --test-concurrency=1 test/integration/*.test.js"
@@ -20,6 +22,7 @@
     "katex": "^0.16.22",
     "markdown-it": "^14.1.0",
     "mathlive": "0.110.0",
+    "mediabunny": "1.55.2",
     "multer": "^2.0.2"
   }
 }

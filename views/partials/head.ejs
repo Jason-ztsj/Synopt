@@ -15,4 +15,7 @@
     <script type="module" src="/static/js/math-editor.js"></script>
   <% } %>
   <script src="/static/js/app.js" defer></script>
+  <% if (typeof includeMediaUpload !== 'undefined' && includeMediaUpload) { %>
+    <script type="module" src="/static/js/media-upload.js"></script>
+  <% } %>
 </head>

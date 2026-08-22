@@ -9,7 +9,18 @@ const DEFAULTS = Object.freeze({
   SESSION_TTL_HOURS: '168',
   SESSION_COOKIE_SECURE: 'false',
   AUTH_COOLDOWN_SECONDS: '2',
-  CLIENT_IP_MODE: 'direct'
+  CLIENT_IP_MODE: 'direct',
+  MAX_VIDEO_DURATION_SECONDS: '7200',
+  MAX_VIDEO_WIDTH: '4096',
+  MAX_VIDEO_HEIGHT: '4096',
+  MAX_VIDEO_PIXELS: '8847360',
+  MAX_VIDEO_FPS: '120',
+  MEDIA_DECODE_ERROR_RATE: '0.001',
+  MEDIA_VALIDATION_POLL_MS: '1000',
+  MEDIA_VALIDATION_STALE_MINUTES: '30',
+  MEDIA_VALIDATION_THREADS: '2',
+  FFPROBE_PATH: 'ffprobe',
+  FFMPEG_PATH: 'ffmpeg'
 });
 
 function requiredText(value, name) {
@@ -59,6 +70,17 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
   const sessionCookieSecure = booleanValue(read('SESSION_COOKIE_SECURE'), 'SESSION_COOKIE_SECURE');
   const authCooldownSeconds = positiveInteger(read('AUTH_COOLDOWN_SECONDS'), 'AUTH_COOLDOWN_SECONDS', 3600);
   const clientIpMode = requiredText(read('CLIENT_IP_MODE'), 'CLIENT_IP_MODE');
+  const maxVideoDurationSeconds = positiveInteger(read('MAX_VIDEO_DURATION_SECONDS'), 'MAX_VIDEO_DURATION_SECONDS', 24 * 60 * 60);
+  const maxVideoWidth = positiveInteger(read('MAX_VIDEO_WIDTH'), 'MAX_VIDEO_WIDTH', 16384);
+  const maxVideoHeight = positiveInteger(read('MAX_VIDEO_HEIGHT'), 'MAX_VIDEO_HEIGHT', 16384);
+  const maxVideoPixels = positiveInteger(read('MAX_VIDEO_PIXELS'), 'MAX_VIDEO_PIXELS', 268_435_456);
+  const maxVideoFps = positiveNumber(read('MAX_VIDEO_FPS'), 'MAX_VIDEO_FPS', 1000);
+  const mediaDecodeErrorRate = positiveNumber(read('MEDIA_DECODE_ERROR_RATE'), 'MEDIA_DECODE_ERROR_RATE', 1);
+  const mediaValidationPollMs = positiveInteger(read('MEDIA_VALIDATION_POLL_MS'), 'MEDIA_VALIDATION_POLL_MS', 60_000);
+  const mediaValidationStaleMinutes = positiveInteger(read('MEDIA_VALIDATION_STALE_MINUTES'), 'MEDIA_VALIDATION_STALE_MINUTES', 24 * 60);
+  const mediaValidationThreads = positiveInteger(read('MEDIA_VALIDATION_THREADS'), 'MEDIA_VALIDATION_THREADS', 8);
+  const ffprobePath = requiredText(read('FFPROBE_PATH'), 'FFPROBE_PATH');
+  const ffmpegPath = requiredText(read('FFMPEG_PATH'), 'FFMPEG_PATH');
 
   if (!['direct', 'cloudflare'].includes(clientIpMode)) {
     throw new Error('配置 CLIENT_IP_MODE 只能是 direct 或 cloudflare');
@@ -74,6 +96,7 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
     databasePath,
     videoStoragePath,
     temporaryStoragePath: path.join(videoStoragePath, '.tmp'),
+    pendingStoragePath: path.join(videoStoragePath, '.pending'),
     maxUploadMb,
     maxUploadBytes,
     discussionCooldownSeconds: cooldownSeconds,
@@ -81,7 +104,18 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
     sessionTtlMs: sessionTtlHours * 60 * 60 * 1000,
     sessionCookieSecure,
     authCooldownSeconds,
-    clientIpMode
+    clientIpMode,
+    maxVideoDurationSeconds,
+    maxVideoWidth,
+    maxVideoHeight,
+    maxVideoPixels,
+    maxVideoFps,
+    mediaDecodeErrorRate,
+    mediaValidationPollMs,
+    mediaValidationStaleMs: mediaValidationStaleMinutes * 60 * 1000,
+    mediaValidationThreads,
+    ffprobePath,
+    ffmpegPath
   });
 }
 

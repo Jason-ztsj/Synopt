@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim
+FROM node:24-bookworm-slim AS dependencies
 
 ENV NODE_ENV=production
 WORKDIR /app
@@ -7,12 +7,35 @@ COPY --chown=node:node package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts \
     && npm cache clean --force
 
+FROM dependencies AS source
+
 COPY --chown=node:node src ./src
 COPY --chown=node:node views ./views
 COPY --chown=node:node public ./public
 
-RUN mkdir -p /app/data/videos/.tmp \
+RUN mkdir -p /app/data/videos/.tmp /app/data/videos/.pending \
     && chown -R node:node /app/data
+
+FROM node:24-bookworm-slim AS validator-runtime
+
+ENV NODE_ENV=production
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+FROM validator-runtime AS validator
+
+COPY --from=source --chown=node:node /app /app
+
+USER node
+
+HEALTHCHECK NONE
+
+CMD ["node", "src/validator-worker.js"]
+
+FROM source AS app
 
 USER node
 

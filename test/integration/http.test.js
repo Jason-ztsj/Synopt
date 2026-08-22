@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { once } from 'node:events';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -10,9 +10,9 @@ import test from 'node:test';
 
 const PROJECT_ROOT = path.resolve(import.meta.dirname, '../..');
 
-function makeMp4(extraBytes = 0) {
-  // A minimal ISO-BMFF ftyp box. The application intentionally checks the
-  // container signature only; codec probing belongs outside this MVP.
+function makeFakeMp4(extraBytes = 0) {
+  // This passes the fast upload-time signature check but must fail the
+  // independent structural and full-decode validation step.
   const box = Buffer.alloc(24 + extraBytes);
   box.writeUInt32BE(24, 0);
   box.write('ftyp', 4, 'ascii');
@@ -21,6 +21,38 @@ function makeMp4(extraBytes = 0) {
   box.write('isom', 16, 'ascii');
   box.write('mp42', 20, 'ascii');
   return box;
+}
+
+const fixturePromises = new Map();
+
+async function generateFixture(container) {
+  if (fixturePromises.has(container)) return fixturePromises.get(container);
+  const promise = (async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'tongjian-media-fixture-'));
+    const extension = container === 'webm' ? 'webm' : 'mp4';
+    const outputPath = path.join(directory, `fixture.${extension}`);
+    const codecArguments = container === 'webm'
+      ? ['-c:v', 'libvpx-vp9', '-deadline', 'realtime', '-cpu-used', '8', '-crf', '40', '-b:v', '0', '-c:a', 'libopus', '-b:a', '48k']
+      : ['-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-g', '12', '-c:a', 'aac', '-b:a', '64k', '-movflags', '+faststart'];
+    const child = spawn('ffmpeg', [
+      '-nostdin', '-hide_banner', '-loglevel', 'error',
+      '-f', 'lavfi', '-i', 'testsrc2=size=96x64:rate=12',
+      '-f', 'lavfi', '-i', 'sine=frequency=880:sample_rate=48000',
+      '-t', '0.6', '-map', '0:v:0', '-map', '1:a:0', '-threads', '1',
+      ...codecArguments, '-y', outputPath
+    ], { stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    const [code, signal] = await once(child, 'close');
+    try {
+      if (code !== 0) throw new Error(`FFmpeg 测试夹具生成失败（${code ?? signal}）：${stderr}`);
+      return await readFile(outputPath);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  })();
+  fixturePromises.set(container, promise);
+  return promise;
 }
 
 async function freePort() {
@@ -100,6 +132,7 @@ async function createTestAccount(baseUrl) {
 async function startApplication({
   maxUploadMb = '1',
   cooldownSeconds = '30',
+  startValidator = true,
   dataDirectory: existingDataDirectory
 } = {}) {
   const dataDirectory = existingDataDirectory
@@ -113,19 +146,30 @@ async function startApplication({
     if (!existingDataDirectory) await rm(dataDirectory, { recursive: true, force: true });
     throw error;
   }
+  const environment = {
+    ...process.env,
+    PORT: String(port),
+    DATABASE_PATH: databasePath,
+    VIDEO_STORAGE_PATH: storageDirectory,
+    MAX_UPLOAD_MB: String(maxUploadMb),
+    DISCUSSION_COOLDOWN_SECONDS: String(cooldownSeconds),
+    MEDIA_VALIDATION_POLL_MS: '50',
+    MEDIA_VALIDATION_STALE_MINUTES: '1',
+    MEDIA_VALIDATION_THREADS: '1',
+    CLIENT_IP_MODE: 'direct'
+  };
   const child = spawn(process.execPath, ['src/index.js'], {
     cwd: PROJECT_ROOT,
-    env: {
-      ...process.env,
-      PORT: String(port),
-      DATABASE_PATH: databasePath,
-      VIDEO_STORAGE_PATH: storageDirectory,
-      MAX_UPLOAD_MB: String(maxUploadMb),
-      DISCUSSION_COOLDOWN_SECONDS: String(cooldownSeconds),
-      CLIENT_IP_MODE: 'direct'
-    },
+    env: environment,
     stdio: ['ignore', 'pipe', 'pipe']
   });
+  const validatorChild = startValidator
+    ? spawn(process.execPath, ['src/validator-worker.js'], {
+        cwd: PROJECT_ROOT,
+        env: environment,
+        stdio: ['ignore', 'pipe', 'pipe']
+      })
+    : null;
 
   let output = '';
   child.stdout.on('data', (chunk) => {
@@ -134,6 +178,8 @@ async function startApplication({
   child.stderr.on('data', (chunk) => {
     output += chunk;
   });
+  validatorChild?.stdout.on('data', (chunk) => { output += `[validator] ${chunk}`; });
+  validatorChild?.stderr.on('data', (chunk) => { output += `[validator] ${chunk}`; });
 
   const baseUrl = `http://127.0.0.1:${port}`;
   const deadline = Date.now() + 8_000;
@@ -149,6 +195,7 @@ async function startApplication({
           baseUrl,
           auth,
           child,
+          validatorChild,
           dataDirectory,
           databasePath,
           storageDirectory,
@@ -166,6 +213,14 @@ async function startApplication({
 }
 
 async function stopApplication(instance, { removeData = true } = {}) {
+  if (instance.validatorChild && instance.validatorChild.exitCode === null && instance.validatorChild.signalCode === null) {
+    instance.validatorChild.kill('SIGTERM');
+    await Promise.race([once(instance.validatorChild, 'exit'), delay(2_000)]);
+    if (instance.validatorChild.exitCode === null && instance.validatorChild.signalCode === null) {
+      instance.validatorChild.kill('SIGKILL');
+      await once(instance.validatorChild, 'exit');
+    }
+  }
   if (instance.child.exitCode === null && instance.child.signalCode === null) {
     instance.child.kill('SIGTERM');
     await Promise.race([once(instance.child, 'exit'), delay(2_000)]);
@@ -184,10 +239,12 @@ async function upload(instance, {
   attribution = true,
   nonCommercial = false,
   noDerivatives = false,
-  bytes = makeMp4(),
+  bytes,
   filename = 'river.mp4',
-  mimeType = 'video/mp4'
+  mimeType = 'video/mp4',
+  acceptJson = false
 } = {}) {
+  const mediaBytes = bytes ?? await generateFixture(filename.toLowerCase().endsWith('.webm') ? 'webm' : 'mp4');
   const form = new FormData();
   form.set('_csrf', instance.auth.csrfToken);
   form.set('title', title);
@@ -196,14 +253,41 @@ async function upload(instance, {
   if (attribution) form.set('attribution', 'on');
   if (nonCommercial) form.set('nonCommercial', 'on');
   if (noDerivatives) form.set('noDerivatives', 'on');
-  form.set('video', new Blob([bytes], { type: mimeType }), filename);
+  form.set('video', new Blob([mediaBytes], { type: mimeType }), filename);
 
   return fetch(`${instance.baseUrl}/videos`, {
     method: 'POST',
-    headers: { cookie: instance.auth.cookieHeader() },
+    headers: {
+      cookie: instance.auth.cookieHeader(),
+      ...(acceptJson ? { accept: 'application/json' } : {})
+    },
     body: form,
     redirect: 'manual'
   });
+}
+
+async function waitForValidation(instance, location, { timeoutMs = 15_000 } = {}) {
+  const id = location.split('/').at(-1);
+  const deadline = Date.now() + timeoutMs;
+  let lastPayload;
+  while (Date.now() < deadline) {
+    const response = await fetch(`${instance.baseUrl}/api/videos/${id}/status`, {
+      headers: {
+        accept: 'application/json',
+        cookie: instance.auth.cookieHeader()
+      },
+      cache: 'no-store'
+    });
+    if (response.ok) {
+      lastPayload = await response.json();
+      if (lastPayload.terminal) return lastPayload;
+    }
+    if (instance.validatorChild && instance.validatorChild.exitCode !== null) {
+      throw new Error(`验证器提前退出（${instance.validatorChild.exitCode}）\n${instance.output()}`);
+    }
+    await delay(50);
+  }
+  throw new Error(`等待媒体验证超时：${JSON.stringify(lastPayload)}\n${instance.output()}`);
 }
 
 async function allFiles(directory) {
@@ -228,7 +312,7 @@ test('真实 HTTP：上传 CC BY-NC-ND 视频并支持完整、Range 与 HEAD �
   const instance = await startApplication();
   t.after(() => stopApplication(instance));
 
-  const original = makeMp4(64);
+  const original = await generateFixture('mp4');
   const response = await upload(instance, {
     bytes: original,
     nonCommercial: true,
@@ -237,6 +321,8 @@ test('真实 HTTP：上传 CC BY-NC-ND 视频并支持完整、Range 与 HEAD �
   assert.equal(response.status, 303);
   const location = response.headers.get('location');
   assert.match(location, /^\/videos\/[0-9a-f-]+$/i);
+  const validation = await waitForValidation(instance, location);
+  assert.equal(validation.status, 'ready');
 
   const detail = await fetch(new URL(location, instance.baseUrl));
   assert.equal(detail.status, 200);
@@ -289,7 +375,10 @@ test('真实 HTTP：上传 CC BY-NC-ND 视频并支持完整、Range 与 HEAD �
   assert.equal(suffix.status, 206);
   assert.deepEqual(Buffer.from(await suffix.arrayBuffer()), original.subarray(-4));
 
-  const unsatisfiable = await fetch(mediaUrl, { headers: { Range: 'bytes=9999-10000' } });
+  const unsatisfiableStart = original.length + 100;
+  const unsatisfiable = await fetch(mediaUrl, {
+    headers: { Range: `bytes=${unsatisfiableStart}-${unsatisfiableStart + 100}` }
+  });
   assert.equal(unsatisfiable.status, 416);
   assert.equal(unsatisfiable.headers.get('content-range'), `bytes */${original.length}`);
 
@@ -307,13 +396,84 @@ test('真实 HTTP：上传 CC BY-NC-ND 视频并支持完整、Range 与 HEAD �
   assert.equal(storedFiles.filter((file) => file.endsWith('.upload')).length, 0);
 });
 
+test('真实 HTTP：WebM VP9/Opus 经完整验证后以正确 MIME 原样公开', async (t) => {
+  const instance = await startApplication();
+  t.after(() => stopApplication(instance));
+
+  const original = await generateFixture('webm');
+  const response = await upload(instance, {
+    title: '开放的 WebM 作品',
+    bytes: original,
+    filename: 'open-work.webm',
+    mimeType: 'video/webm',
+    acceptJson: true
+  });
+  assert.equal(response.status, 202);
+  const accepted = await response.json();
+  assert.equal(accepted.status, 'pending');
+  assert.match(accepted.statusUrl, /^\/api\/videos\/[0-9a-f-]+\/status$/i);
+  const location = accepted.redirect;
+  const validation = await waitForValidation(instance, location);
+  assert.equal(validation.status, 'ready');
+
+  const detail = await fetch(`${instance.baseUrl}${location}`);
+  assert.equal(detail.status, 200);
+  assert.match(await detail.text(), /VP9[^<]*\+[^<]*Opus[^<]*WEBM/i);
+
+  const media = await fetch(`${instance.baseUrl}${location}/media`);
+  assert.equal(media.status, 200);
+  assert.match(media.headers.get('content-type') || '', /^video\/webm/);
+  assert.deepEqual(Buffer.from(await media.arrayBuffer()), original);
+});
+
+test('真实 HTTP：pending 媒体只对上传者展示状态，不能播放、列出或讨论', async (t) => {
+  const instance = await startApplication({ startValidator: false });
+  t.after(() => stopApplication(instance));
+
+  const response = await upload(instance, { title: '仍在隔离区的作品' });
+  assert.equal(response.status, 303);
+  const location = response.headers.get('location');
+  const id = location.split('/').at(-1);
+
+  const status = await fetch(`${instance.baseUrl}/api/videos/${id}/status`, {
+    headers: { cookie: instance.auth.cookieHeader(), accept: 'application/json' }
+  });
+  assert.equal(status.status, 200);
+  assert.equal((await status.json()).status, 'pending');
+
+  const ownerDetail = await fetch(`${instance.baseUrl}${location}`, {
+    headers: { cookie: instance.auth.cookieHeader() }
+  });
+  assert.equal(ownerDetail.status, 200);
+  assert.match(await ownerDetail.text(), /等待验证|发布前安全检查/);
+  assert.equal((await fetch(`${instance.baseUrl}${location}`)).status, 404);
+  assert.equal((await fetch(`${instance.baseUrl}${location}/media`)).status, 409);
+
+  const homepage = await fetch(instance.baseUrl);
+  assert.doesNotMatch(await homepage.text(), /仍在隔离区的作品/);
+  const discussion = await fetch(`${instance.baseUrl}${location}/discussions`, {
+    method: 'POST',
+    headers: {
+      accept: 'application/json',
+      cookie: instance.auth.cookieHeader(),
+      'content-type': 'application/x-www-form-urlencoded'
+    },
+    body: new URLSearchParams({ _csrf: instance.auth.csrfToken, body: '不应写入' })
+  });
+  assert.equal(discussion.status, 409);
+
+  const storedFiles = await allFiles(instance.storageDirectory);
+  assert.equal(storedFiles.length, 1);
+  assert.match(storedFiles[0], /[/\\]\.pending[/\\].+\.mp4$/);
+});
+
 test('真实 HTTP：拒绝扩展名、MIME、ftyp 错误以及超限文件，并清理临时文件', async (t) => {
   const instance = await startApplication({ maxUploadMb: '1' });
   t.after(() => stopApplication(instance));
 
   const invalidCases = [
-    { filename: 'not-video.txt', mimeType: 'video/mp4', bytes: makeMp4() },
-    { filename: 'not-video.mp4', mimeType: 'text/plain', bytes: makeMp4() },
+    { filename: 'not-video.txt', mimeType: 'video/mp4', bytes: makeFakeMp4() },
+    { filename: 'not-video.mp4', mimeType: 'text/plain', bytes: makeFakeMp4() },
     {
       filename: 'not-video.mp4',
       mimeType: 'video/mp4',
@@ -337,10 +497,27 @@ test('真实 HTTP：拒绝扩展名、MIME、ftyp 错误以及超限文件，并
   }
 
   const tooLarge = await upload(instance, {
-    bytes: makeMp4(1024 * 1024 + 1)
+    bytes: makeFakeMp4(1024 * 1024 + 1)
   });
   assert.equal(tooLarge.status, 413);
   assert.match(await tooLarge.text(), /过大|上限|MiB|大小/i);
+  assert.deepEqual(await allFiles(instance.storageDirectory), []);
+
+  const disguisedGarbage = await upload(instance, {
+    title: '伪造文件头不会公开',
+    bytes: makeFakeMp4(64)
+  });
+  assert.equal(disguisedGarbage.status, 303);
+  const rejectedLocation = disguisedGarbage.headers.get('location');
+  const rejected = await waitForValidation(instance, rejectedLocation);
+  assert.equal(rejected.status, 'rejected');
+  const rejectedMedia = await fetch(`${instance.baseUrl}${rejectedLocation}/media`);
+  assert.equal(rejectedMedia.status, 409);
+  const ownerDetail = await fetch(`${instance.baseUrl}${rejectedLocation}`, {
+    headers: { cookie: instance.auth.cookieHeader() }
+  });
+  assert.equal(ownerDetail.status, 200);
+  assert.match(await ownerDetail.text(), /未通过验证|不能|无效|结构/);
   assert.deepEqual(await allFiles(instance.storageDirectory), []);
 
   const homepage = await fetch(instance.baseUrl);
@@ -355,6 +532,7 @@ test('真实 HTTP：讨论首次发布成功，立即重复返回 429、Retry-Af
   const uploaded = await upload(instance);
   assert.equal(uploaded.status, 303);
   const location = uploaded.headers.get('location');
+  assert.equal((await waitForValidation(instance, location)).ready, true);
 
   const body = new URLSearchParams({
     _csrf: instance.auth.csrfToken,
@@ -413,6 +591,7 @@ test('真实 HTTP：账号会话保护上传与讨论，校验 CSRF，并支持�
   const uploaded = await upload(instance, { title: '账号归属验证' });
   assert.equal(uploaded.status, 303);
   const location = uploaded.headers.get('location');
+  assert.equal((await waitForValidation(instance, location)).ready, true);
   const detail = await fetch(new URL(location, instance.baseUrl));
   assert.match(await detail.text(), /验收用户/);
 
@@ -499,7 +678,7 @@ test('真实 HTTP：重启进程后视频、Range、许可证和讨论仍然存�
   });
 
   firstInstance = await startApplication({ dataDirectory });
-  const mediaBytes = makeMp4(32);
+  const mediaBytes = await generateFixture('mp4');
   const uploaded = await upload(firstInstance, {
     bytes: mediaBytes,
     attribution: false,
@@ -508,6 +687,7 @@ test('真实 HTTP：重启进程后视频、Range、许可证和讨论仍然存�
   });
   assert.equal(uploaded.status, 303);
   const location = uploaded.headers.get('location');
+  assert.equal((await waitForValidation(firstInstance, location)).ready, true);
 
   const firstDiscussion = await fetch(`${firstInstance.baseUrl}${location}/discussions`, {
     method: 'POST',

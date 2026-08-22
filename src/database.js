@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
 
 function requireSha256Hash(value, name) {
@@ -24,11 +24,39 @@ function mapVideo(row) {
     originalFilename: row.original_filename,
     mediaType: row.media_type,
     byteSize: row.byte_size,
+    container: row.container ?? (row.media_type === 'video/webm' ? 'webm' : 'mp4'),
+    videoCodec: row.video_codec ?? 'unknown',
+    audioCodec: row.audio_codec ?? null,
+    playbackStrategy: row.playback_strategy ?? 'native',
+    validationStatus: row.validation_status ?? 'ready',
+    sha256: row.sha256 ?? null,
+    durationSeconds: row.duration_seconds ?? null,
+    width: row.width ?? null,
+    height: row.height ?? null,
+    frameRate: row.frame_rate ?? null,
+    validationWarningCount: row.validation_warning_count ?? 0,
+    validationSummary: parseJsonObject(row.validation_summary),
+    validationStartedAt: row.validation_started_at ?? null,
+    validatedAt: row.validated_at ?? null,
+    sourceContainer: row.source_container ?? null,
+    sourceVideoCodec: row.source_video_codec ?? null,
+    sourceAudioCodec: row.source_audio_codec ?? null,
+    ingestOperation: row.ingest_operation ?? 'unknown',
     userId: row.user_id ?? null,
     accountUsername: row.account_username ?? null,
     accountDisplayName: row.account_display_name ?? null,
     createdAt: row.created_at
   };
+}
+
+function parseJsonObject(value) {
+  if (typeof value !== 'string' || !value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 function mapDiscussion(row) {
@@ -77,12 +105,7 @@ function hasColumn(database, table, column) {
   return database.prepare(`PRAGMA table_info('${table}')`).all().some((entry) => entry.name === column);
 }
 
-function migrate(database) {
-  const version = database.prepare('PRAGMA user_version').get().user_version;
-  if (version > CURRENT_SCHEMA_VERSION) {
-    throw new Error(`数据库结构版本 ${version} 高于程序支持的版本 ${CURRENT_SCHEMA_VERSION}`);
-  }
-
+function migrateToV1(database) {
   database.exec('BEGIN IMMEDIATE');
   try {
     database.exec(`
@@ -142,12 +165,92 @@ function migrate(database) {
     database.exec('CREATE INDEX IF NOT EXISTS idx_discussions_user_id ON discussions(user_id)');
     database.exec('CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)');
     database.exec('CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)');
-    database.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);
+    database.exec('PRAGMA user_version = 1');
     database.exec('COMMIT');
   } catch (error) {
     database.exec('ROLLBACK');
     throw error;
   }
+}
+
+function migrateToV2(database) {
+  database.exec('PRAGMA foreign_keys = OFF');
+  database.exec('BEGIN IMMEDIATE');
+  try {
+    database.exec(`
+      CREATE TABLE videos_v2 (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL CHECK (length(title) BETWEEN 1 AND 120),
+        creator TEXT NOT NULL CHECK (length(creator) BETWEEN 1 AND 80),
+        description TEXT NOT NULL DEFAULT '' CHECK (length(description) <= 2000),
+        license_code TEXT NOT NULL CHECK (license_code IN ('CC0-1.0', 'CC-BY-4.0', 'CC-BY-NC-4.0', 'CC-BY-ND-4.0', 'CC-BY-NC-ND-4.0')),
+        storage_name TEXT NOT NULL UNIQUE,
+        original_filename TEXT NOT NULL,
+        media_type TEXT NOT NULL CHECK (media_type IN ('video/mp4', 'video/webm')),
+        byte_size INTEGER NOT NULL CHECK (byte_size > 0),
+        container TEXT NOT NULL CHECK (container IN ('mp4', 'webm')),
+        video_codec TEXT NOT NULL CHECK (video_codec IN ('unknown', 'avc', 'hevc', 'vp9', 'av1')),
+        audio_codec TEXT CHECK (audio_codec IS NULL OR audio_codec IN ('unknown', 'aac', 'opus')),
+        playback_strategy TEXT NOT NULL CHECK (playback_strategy IN ('native', 'native-hevc')),
+        validation_status TEXT NOT NULL CHECK (validation_status IN ('pending', 'validating', 'ready', 'ready_with_warnings', 'rejected', 'validation_failed')),
+        sha256 TEXT CHECK (sha256 IS NULL OR length(sha256) = 64),
+        duration_seconds REAL CHECK (duration_seconds IS NULL OR duration_seconds > 0),
+        width INTEGER CHECK (width IS NULL OR width > 0),
+        height INTEGER CHECK (height IS NULL OR height > 0),
+        frame_rate REAL CHECK (frame_rate IS NULL OR frame_rate > 0),
+        validation_warning_count INTEGER NOT NULL DEFAULT 0 CHECK (validation_warning_count >= 0),
+        validation_summary TEXT NOT NULL DEFAULT '{}',
+        validation_started_at TEXT,
+        validated_at TEXT,
+        source_container TEXT,
+        source_video_codec TEXT,
+        source_audio_codec TEXT,
+        ingest_operation TEXT NOT NULL DEFAULT 'unknown' CHECK (ingest_operation IN ('unknown', 'direct', 'remux')),
+        user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL
+      ) STRICT;
+    `);
+    database.exec(`
+      INSERT INTO videos_v2 (
+        id, title, creator, description, license_code, storage_name, original_filename,
+        media_type, byte_size, container, video_codec, audio_codec, playback_strategy,
+        validation_status, validation_warning_count, validation_summary,
+        ingest_operation, user_id, created_at
+      )
+      SELECT
+        id, title, creator, description, license_code, storage_name, original_filename,
+        media_type, byte_size, 'mp4', 'unknown', NULL, 'native',
+        'ready', 0, '{"legacyUnverified":true}',
+        'unknown', user_id, created_at
+      FROM videos;
+    `);
+    database.exec('DROP TABLE videos');
+    database.exec('ALTER TABLE videos_v2 RENAME TO videos');
+    database.exec('CREATE INDEX idx_videos_created_at_id ON videos(created_at DESC, id DESC)');
+    database.exec('CREATE INDEX idx_videos_user_id ON videos(user_id)');
+    database.exec('CREATE INDEX idx_videos_validation_status_created_at ON videos(validation_status, created_at ASC, id ASC)');
+    const foreignKeyErrors = database.prepare('PRAGMA foreign_key_check').all();
+    if (foreignKeyErrors.length > 0) throw new Error('数据库 v2 迁移后的外键检查失败');
+    database.exec('PRAGMA user_version = 2');
+    database.exec('COMMIT');
+  } catch (error) {
+    database.exec('ROLLBACK');
+    throw error;
+  } finally {
+    database.exec('PRAGMA foreign_keys = ON');
+  }
+}
+
+function migrate(database) {
+  let version = database.prepare('PRAGMA user_version').get().user_version;
+  if (version > CURRENT_SCHEMA_VERSION) {
+    throw new Error(`数据库结构版本 ${version} 高于程序支持的版本 ${CURRENT_SCHEMA_VERSION}`);
+  }
+  if (version < 1) {
+    migrateToV1(database);
+    version = 1;
+  }
+  if (version < 2) migrateToV2(database);
 }
 
 export function openDatabase(databasePath) {
@@ -186,13 +289,49 @@ export function openDatabase(databasePath) {
   `;
 
   const statements = {
-    listVideos: database.prepare(`${videoSelect} ORDER BY v.created_at DESC, v.id DESC`),
+    listVideos: database.prepare(`${videoSelect} WHERE v.validation_status IN ('ready', 'ready_with_warnings') ORDER BY v.created_at DESC, v.id DESC`),
     getVideo: database.prepare(`${videoSelect} WHERE v.id = ?`),
     insertVideo: database.prepare(`
-      INSERT INTO videos (id, title, creator, description, license_code, storage_name, original_filename, media_type, byte_size, user_id, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO videos (
+        id, title, creator, description, license_code, storage_name, original_filename,
+        media_type, byte_size, container, video_codec, audio_codec, playback_strategy,
+        validation_status, sha256, duration_seconds, width, height, frame_rate,
+        validation_warning_count, validation_summary, validation_started_at, validated_at,
+        source_container, source_video_codec, source_audio_codec, ingest_operation,
+        user_id, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `),
     deleteVideo: database.prepare('DELETE FROM videos WHERE id = ?'),
+    nextPendingVideo: database.prepare(`${videoSelect} WHERE v.validation_status = 'pending' ORDER BY v.created_at ASC, v.id ASC LIMIT 1`),
+    markVideoValidating: database.prepare(`
+      UPDATE videos
+      SET validation_status = 'validating', validation_started_at = ?, validation_summary = '{}'
+      WHERE id = ? AND validation_status = 'pending'
+    `),
+    resetStaleValidations: database.prepare(`
+      UPDATE videos
+      SET validation_status = 'pending', validation_started_at = NULL
+      WHERE validation_status = 'validating' AND validation_started_at < ?
+    `),
+    retryFailedValidations: database.prepare(`
+      UPDATE videos
+      SET validation_status = 'pending', validation_started_at = NULL
+      WHERE validation_status = 'validation_failed'
+    `),
+    completeVideoValidation: database.prepare(`
+      UPDATE videos
+      SET media_type = ?, container = ?, video_codec = ?, audio_codec = ?, playback_strategy = ?,
+          sha256 = ?, duration_seconds = ?, width = ?, height = ?, frame_rate = ?,
+          validation_status = ?, validation_warning_count = ?, validation_summary = ?, validated_at = ?
+      WHERE id = ? AND validation_status = 'validating'
+    `),
+    finishVideoValidationFailure: database.prepare(`
+      UPDATE videos
+      SET validation_status = ?, validation_warning_count = ?, validation_summary = ?, validated_at = ?
+      WHERE id = ? AND validation_status = 'validating'
+    `),
+    allStorageNames: database.prepare('SELECT storage_name FROM videos'),
     listDiscussions: database.prepare(`${discussionSelect} WHERE d.video_id = ? ORDER BY d.created_at ASC, d.id ASC`),
     insertDiscussion: database.prepare(`
       INSERT INTO discussions (video_id, nickname, body_markdown, user_id, created_at)
@@ -229,6 +368,8 @@ export function openDatabase(databasePath) {
       return mapVideo(statements.getVideo.get(id));
     },
     insertVideo(video) {
+      const container = video.container ?? (video.mediaType === 'video/webm' ? 'webm' : 'mp4');
+      const validationStatus = video.validationStatus ?? 'ready';
       statements.insertVideo.run(
         video.id,
         video.title,
@@ -239,6 +380,24 @@ export function openDatabase(databasePath) {
         video.originalFilename,
         video.mediaType,
         video.byteSize,
+        container,
+        video.videoCodec ?? 'unknown',
+        video.audioCodec ?? null,
+        video.playbackStrategy ?? 'native',
+        validationStatus,
+        video.sha256 ?? null,
+        video.durationSeconds ?? null,
+        video.width ?? null,
+        video.height ?? null,
+        video.frameRate ?? null,
+        video.validationWarningCount ?? 0,
+        JSON.stringify(video.validationSummary ?? {}),
+        video.validationStartedAt ?? null,
+        video.validatedAt ?? null,
+        video.sourceContainer ?? null,
+        video.sourceVideoCodec ?? null,
+        video.sourceAudioCodec ?? null,
+        video.ingestOperation ?? 'unknown',
         video.userId ?? null,
         video.createdAt
       );
@@ -246,6 +405,61 @@ export function openDatabase(databasePath) {
     },
     deleteVideo(id) {
       return statements.deleteVideo.run(id).changes;
+    },
+    claimNextVideoForValidation(startedAt) {
+      database.exec('BEGIN IMMEDIATE');
+      try {
+        const video = mapVideo(statements.nextPendingVideo.get());
+        if (!video) {
+          database.exec('COMMIT');
+          return null;
+        }
+        const changed = statements.markVideoValidating.run(startedAt, video.id).changes;
+        database.exec('COMMIT');
+        return changed === 1 ? this.getVideo(video.id) : null;
+      } catch (error) {
+        database.exec('ROLLBACK');
+        throw error;
+      }
+    },
+    resetStaleValidations(cutoffIso) {
+      return statements.resetStaleValidations.run(cutoffIso).changes;
+    },
+    retryFailedValidations() {
+      return statements.retryFailedValidations.run().changes;
+    },
+    completeVideoValidation(id, result, validatedAt) {
+      const status = result.warningCount > 0 ? 'ready_with_warnings' : 'ready';
+      return statements.completeVideoValidation.run(
+        result.mediaType,
+        result.container,
+        result.videoCodec,
+        result.audioCodec ?? null,
+        result.playbackStrategy,
+        result.sha256,
+        result.durationSeconds,
+        result.width,
+        result.height,
+        result.frameRate,
+        status,
+        result.warningCount,
+        JSON.stringify(result.summary ?? {}),
+        validatedAt,
+        id
+      ).changes;
+    },
+    rejectVideoValidation(id, summary, validatedAt, warningCount = 0) {
+      return statements.finishVideoValidationFailure.run(
+        'rejected', warningCount, JSON.stringify(summary ?? {}), validatedAt, id
+      ).changes;
+    },
+    failVideoValidation(id, summary, validatedAt) {
+      return statements.finishVideoValidationFailure.run(
+        'validation_failed', 0, JSON.stringify(summary ?? {}), validatedAt, id
+      ).changes;
+    },
+    listVideoStorageNames() {
+      return statements.allStorageNames.all().map((row) => row.storage_name);
     },
     listDiscussions(videoId) {
       return statements.listDiscussions.all(videoId).map(mapDiscussion);

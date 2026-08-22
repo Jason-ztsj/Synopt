@@ -23,7 +23,11 @@ import { AppError, ValidationError } from './errors.js';
 import { getClientIp } from './ip.js';
 import { getLicense, normalizeLicense } from './license.js';
 import { renderMarkdown } from './markdown.js';
-import { validateMp4File, validateMp4Metadata } from './mp4.js';
+import {
+  normalizeSourceFilename,
+  validateCanonicalUploadHeader,
+  validateCanonicalUploadMetadata
+} from './media-upload.js';
 import { DiscussionRateLimiter } from './rate-limit.js';
 import {
   validateDiscussionBody,
@@ -133,6 +137,24 @@ function publicVideoPath(config, storageName) {
   return path.join(config.videoStoragePath, storageName);
 }
 
+function pendingVideoPath(config, storageName) {
+  if (typeof storageName !== 'string' || path.basename(storageName) !== storageName) {
+    throw new AppError('视频存储记录无效', 500, 'INVALID_STORAGE_RECORD');
+  }
+  return path.join(config.pendingStoragePath, storageName);
+}
+
+function publicValidationStatus(status) {
+  return ({
+    pending: { label: '等待验证', terminal: false },
+    validating: { label: '正在完整验证', terminal: false },
+    ready: { label: '验证通过', terminal: true },
+    ready_with_warnings: { label: '验证通过（有轻微警告）', terminal: true },
+    rejected: { label: '媒体未通过验证', terminal: true },
+    validation_failed: { label: '验证服务暂时失败', terminal: false }
+  })[status] ?? { label: '未知状态', terminal: true };
+}
+
 function discussionView(discussion) {
   return {
     ...discussion,
@@ -146,6 +168,7 @@ export function createApp(options = {}) {
   const nowIso = () => new Date(now()).toISOString();
   fs.mkdirSync(config.videoStoragePath, { recursive: true });
   fs.mkdirSync(config.temporaryStoragePath, { recursive: true });
+  fs.mkdirSync(config.pendingStoragePath, { recursive: true });
   const database = options.database ?? openDatabase(config.databasePath);
   const ownsDatabase = options.database === undefined;
   const rateLimiter = options.rateLimiter ?? new DiscussionRateLimiter({
@@ -169,7 +192,7 @@ export function createApp(options = {}) {
 
   app.use((_request, response, next) => {
     response.set({
-      'Content-Security-Policy': "default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; media-src 'self'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'",
+      'Content-Security-Policy': "default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; media-src 'self'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; worker-src 'self'",
       'Cross-Origin-Opener-Policy': 'same-origin',
       'Cross-Origin-Resource-Policy': 'same-origin',
       'Permissions-Policy': 'camera=(), geolocation=(), microphone=()',
@@ -191,6 +214,11 @@ export function createApp(options = {}) {
     immutable: true,
     maxAge: '1y'
   }));
+  app.get('/assets/mediabunny/mediabunny.min.mjs', (_request, response) => {
+    response.type('text/javascript').sendFile(
+      path.join(projectRoot, 'node_modules', 'mediabunny', 'dist', 'bundles', 'mediabunny.min.mjs')
+    );
+  });
   app.use(express.json({ limit: '32kb' }));
   app.use(express.urlencoded({ extended: false, limit: '32kb' }));
 
@@ -300,7 +328,7 @@ export function createApp(options = {}) {
     limits: {
       fileSize: config.maxUploadBytes,
       files: 1,
-      fields: 8,
+      fields: 16,
       fieldNameSize: 64,
       fieldSize: 32 * 1024
     }
@@ -473,7 +501,7 @@ export function createApp(options = {}) {
   app.post('/videos', requireAuthentication, (request, response, next) => {
     upload.single('video')(request, response, async (uploadError) => {
       let temporaryPath = request.file?.path;
-      let finalPath;
+      let stagedPath;
       try {
         if (uploadError) {
           const tooLarge = uploadError instanceof multer.MulterError && uploadError.code === 'LIMIT_FILE_SIZE';
@@ -485,15 +513,15 @@ export function createApp(options = {}) {
         }
         assertCsrf(request);
         const fields = validateVideoFields(request.body);
-        if (!request.file) throw new ValidationError('请选择一个 MP4 视频文件', 'VIDEO_REQUIRED');
-        validateMp4Metadata(request.file.originalname, request.file.mimetype);
-        await validateMp4File(temporaryPath);
+        if (!request.file) throw new ValidationError('请选择一个视频文件', 'VIDEO_REQUIRED');
+        const canonical = validateCanonicalUploadMetadata(request.file.originalname, request.file.mimetype);
+        await validateCanonicalUploadHeader(temporaryPath, canonical.container);
 
         const license = normalizeLicense(request.body);
         const id = crypto.randomUUID();
-        const storageName = `${crypto.randomUUID()}.mp4`;
-        finalPath = publicVideoPath(config, storageName);
-        await rename(temporaryPath, finalPath);
+        const storageName = `${crypto.randomUUID()}.${canonical.container}`;
+        stagedPath = pendingVideoPath(config, storageName);
+        await rename(temporaryPath, stagedPath);
         temporaryPath = undefined;
 
         try {
@@ -503,18 +531,38 @@ export function createApp(options = {}) {
             ...fields,
             licenseCode: license.id,
             storageName,
-            originalFilename: request.file.originalname,
-            mediaType: 'video/mp4',
+            originalFilename: normalizeSourceFilename(request.body?.sourceFilename, request.file.originalname),
+            mediaType: canonical.mediaType,
             byteSize: request.file.size,
+            container: canonical.container,
+            videoCodec: 'unknown',
+            audioCodec: null,
+            playbackStrategy: 'native',
+            validationStatus: 'pending',
+            validationSummary: {},
+            sourceContainer: /^[a-z0-9-]{1,24}$/.test(request.body?.clientContainer ?? '') ? request.body.clientContainer : null,
+            sourceVideoCodec: /^[a-z0-9-]{1,24}$/.test(request.body?.clientVideoCodec ?? '') ? request.body.clientVideoCodec : null,
+            sourceAudioCodec: /^[a-z0-9-]{1,24}$/.test(request.body?.clientAudioCodec ?? '') ? request.body.clientAudioCodec : null,
+            ingestOperation: ['direct', 'remux'].includes(request.body?.clientOperation) ? request.body.clientOperation : 'unknown',
             createdAt: nowIso()
           });
         } catch (error) {
-          await safeUnlink(finalPath);
-          finalPath = undefined;
+          await safeUnlink(stagedPath);
+          stagedPath = undefined;
           throw error;
         }
 
-        response.redirect(303, `/videos/${id}`);
+        const detailPath = `/videos/${id}`;
+        if (wantsJson(request)) {
+          response.status(202).json({
+            id,
+            status: 'pending',
+            redirect: detailPath,
+            statusUrl: `/api/videos/${id}/status`
+          });
+          return;
+        }
+        response.redirect(303, detailPath);
       } catch (error) {
         try {
           await safeUnlink(temporaryPath);
@@ -523,6 +571,10 @@ export function createApp(options = {}) {
           console.error('上传临时文件清理失败：', cleanupError);
         }
         if (error instanceof AppError) {
+          if (wantsJson(request)) {
+            response.status(error.status).json({ error: error.message, code: error.code });
+            return;
+          }
           response.status(error.status).render('upload', {
             form: request.body ?? {},
             error: error.message,
@@ -539,13 +591,18 @@ export function createApp(options = {}) {
     try {
       const video = database.getVideo(request.params.id);
       if (!video) throw new AppError('找不到这段视频', 404, 'VIDEO_NOT_FOUND');
+      const isReady = ['ready', 'ready_with_warnings'].includes(video.validationStatus);
+      if (!isReady && request.currentUser?.id !== video.userId) {
+        throw new AppError('找不到这段视频', 404, 'VIDEO_NOT_FOUND');
+      }
       const license = getLicense(video.licenseCode);
       if (!license) throw new AppError('视频许可证记录无效', 500, 'INVALID_LICENSE_RECORD');
-      const discussions = database.listDiscussions(video.id).map(discussionView);
+      const discussions = isReady ? database.listDiscussions(video.id).map(discussionView) : [];
       response.render('video', {
         video,
         license,
         discussions,
+        validationStatus: publicValidationStatus(video.validationStatus),
         discussionError: '',
         discussionCooldownSeconds: config.discussionCooldownSeconds
       });
@@ -558,6 +615,9 @@ export function createApp(options = {}) {
     try {
       const video = database.getVideo(request.params.id);
       if (!video) throw new AppError('找不到这段视频', 404, 'VIDEO_NOT_FOUND');
+      if (!['ready', 'ready_with_warnings'].includes(video.validationStatus)) {
+        throw new AppError('视频仍在验证或未通过验证', 409, 'MEDIA_NOT_READY');
+      }
       const filePath = publicVideoPath(config, video.storageName);
       const fileStat = await stat(filePath);
       if (!fileStat.isFile()) throw new AppError('视频文件不可用', 404, 'MEDIA_NOT_FOUND');
@@ -566,7 +626,7 @@ export function createApp(options = {}) {
 
       response.set({
         'Accept-Ranges': 'bytes',
-        'Content-Type': 'video/mp4',
+        'Content-Type': video.mediaType,
         'Cache-Control': response.hasHeader('Set-Cookie')
           ? 'private, no-store'
           : 'public, max-age=3600'
@@ -605,6 +665,25 @@ export function createApp(options = {}) {
 
   app.route('/videos/:id/media').get(serveMedia).head(serveMedia);
 
+  app.get('/api/videos/:id/status', requireAuthentication, (request, response, next) => {
+    try {
+      const video = database.getVideo(request.params.id);
+      if (!video || video.userId !== request.currentUser.id) {
+        throw new AppError('找不到这段视频', 404, 'VIDEO_NOT_FOUND');
+      }
+      const status = publicValidationStatus(video.validationStatus);
+      response.status(200).json({
+        status: video.validationStatus,
+        label: status.label,
+        terminal: status.terminal,
+        ready: ['ready', 'ready_with_warnings'].includes(video.validationStatus),
+        warningCount: video.validationWarningCount
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post('/api/markdown-preview', (request, response, next) => {
     try {
       const body = validateDiscussionBody(request.body?.body ?? request.body?.markdown);
@@ -623,6 +702,9 @@ export function createApp(options = {}) {
       assertCsrf(request);
       const video = database.getVideo(request.params.id);
       if (!video) throw new AppError('找不到这段视频', 404, 'VIDEO_NOT_FOUND');
+      if (!['ready', 'ready_with_warnings'].includes(video.validationStatus)) {
+        throw new AppError('视频通过验证后才能参与讨论', 409, 'MEDIA_NOT_READY');
+      }
       const bodyMarkdown = validateDiscussionBody(request.body?.body);
       renderMarkdown(bodyMarkdown);
       const clientIp = getClientIp(request, config.clientIpMode);

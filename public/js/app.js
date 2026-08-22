@@ -81,70 +81,6 @@
     updateLicense();
   }
 
-  function formatFileSize(bytes) {
-    if (!Number.isFinite(bytes) || bytes < 1) return '0 B';
-    if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KiB`;
-    return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MiB`;
-  }
-
-  function setupFilePicker(input) {
-    const drop = input.closest('[data-file-drop]');
-    const title = drop?.querySelector('[data-file-title]');
-    const detail = drop?.querySelector('[data-file-detail]');
-    const defaultTitle = title?.textContent || '';
-    const defaultDetail = detail?.textContent || '';
-
-    function showSelectedFile() {
-      const file = input.files?.[0];
-      input.setCustomValidity('');
-
-      if (!file) {
-        if (title) title.textContent = defaultTitle;
-        if (detail) detail.textContent = defaultDetail;
-        return;
-      }
-
-      const isMp4Name = file.name.toLowerCase().endsWith('.mp4');
-      if (!isMp4Name) {
-        input.setCustomValidity('请选择扩展名为 .mp4 的视频文件。');
-        input.reportValidity();
-      }
-
-      if (title) title.textContent = file.name;
-      if (detail) detail.textContent = `${formatFileSize(file.size)} · ${isMp4Name ? 'MP4 已选择' : '文件格式不正确'}`;
-    }
-
-    input.addEventListener('change', showSelectedFile);
-
-    if (drop) {
-      ['dragenter', 'dragover'].forEach((eventName) => {
-        drop.addEventListener(eventName, () => drop.classList.add('is-dragging'));
-      });
-      ['dragleave', 'drop'].forEach((eventName) => {
-        drop.addEventListener(eventName, () => drop.classList.remove('is-dragging'));
-      });
-    }
-  }
-
-  function setupUploadForm(form) {
-    const button = form.querySelector('[data-submit-button]');
-    const status = form.querySelector('[data-upload-status]');
-
-    form.addEventListener('submit', () => {
-      if (!form.checkValidity()) return;
-      if (status) {
-        status.classList.remove('is-error');
-        status.textContent = '正在上传并校验视频，请不要关闭这个页面……';
-      }
-      window.setTimeout(() => {
-        if (button) {
-          button.disabled = true;
-          button.textContent = '正在发布…';
-        }
-      }, 0);
-    });
-  }
-
   function setupMarkdownEditor(editor) {
     const input = editor.querySelector('[data-markdown-input]');
     const preview = editor.querySelector('[data-markdown-preview]');
@@ -315,9 +251,52 @@
     });
   }
 
+  function setupValidationWatch(panel) {
+    const endpoint = panel.dataset.statusUrl;
+    const label = panel.querySelector('[data-validation-label]');
+    let stopped = !endpoint || !['pending', 'validating', 'validation_failed'].includes(panel.dataset.currentStatus);
+    let timer;
+
+    async function poll() {
+      if (stopped || document.visibilityState === 'hidden') return;
+      try {
+        const response = await fetch(endpoint, {
+          headers: { Accept: 'application/json' },
+          cache: 'no-store'
+        });
+        if (response.status === 401 || response.status === 404) {
+          stopped = true;
+          return;
+        }
+        if (!response.ok) throw new Error('validation status unavailable');
+        const result = await response.json();
+        if (label && result.label) label.textContent = result.label;
+        if (result.status && result.status !== panel.dataset.currentStatus) {
+          panel.dataset.currentStatus = result.status;
+          if (result.ready || result.terminal) {
+            stopped = true;
+            window.location.reload();
+            return;
+          }
+        }
+      } catch {
+        // A transient network failure must not change the media's validation state.
+      }
+      if (!stopped) timer = window.setTimeout(poll, 1500);
+    }
+
+    const resume = () => {
+      if (!stopped && document.visibilityState === 'visible') {
+        window.clearTimeout(timer);
+        timer = window.setTimeout(poll, 150);
+      }
+    };
+    document.addEventListener('visibilitychange', resume);
+    timer = window.setTimeout(poll, 750);
+  }
+
   document.querySelectorAll('[data-license-picker]').forEach(setupLicensePicker);
-  document.querySelectorAll('[data-file-input]').forEach(setupFilePicker);
-  document.querySelectorAll('[data-upload-form]').forEach(setupUploadForm);
   document.querySelectorAll('[data-markdown-editor]').forEach(setupMarkdownEditor);
   document.querySelectorAll('[data-discussion-form]').forEach(setupDiscussionForm);
+  document.querySelectorAll('[data-validation-watch]').forEach(setupValidationWatch);
 })();

@@ -43,6 +43,15 @@
   const videoAccountUsername = video.accountUsername || video.account_username || video.uploaderUsername || video.uploader_username || '';
   const videoAccountLabel = videoAccountDisplayName || videoAccountUsername;
   const safeCsrfToken = typeof csrfToken === 'string' ? csrfToken : '';
+  const currentValidationStatus = video.validationStatus || video.validation_status || 'ready';
+  const videoIsReady = currentValidationStatus === 'ready' || currentValidationStatus === 'ready_with_warnings';
+  const validationView = typeof validationStatus === 'object' && validationStatus ? validationStatus : { label: currentValidationStatus };
+  const validationSummary = video.validationSummary || video.validation_summary || {};
+  const videoCodecLabels = { avc: 'H.264', hevc: 'HEVC', vp9: 'VP9', av1: 'AV1', unknown: '历史媒体' };
+  const audioCodecLabels = { aac: 'AAC', opus: 'Opus', unknown: '未知音频' };
+  const videoCodecLabel = videoCodecLabels[video.videoCodec || video.video_codec] || (video.videoCodec || video.video_codec || '未知编码');
+  const audioCodecValue = video.audioCodec || video.audio_codec;
+  const mediaFormatLabel = `${videoCodecLabel}${audioCodecValue ? ' + ' + (audioCodecLabels[audioCodecValue] || audioCodecValue) : ''} · ${(video.container || 'mp4').toUpperCase()}`;
 %>
 <%- include('partials/head', {
   pageTitle: video.title + '｜同见',
@@ -68,13 +77,43 @@
       <% } %>
     </header>
 
+    <% if (currentValidationStatus === 'ready_with_warnings') { %>
+      <div class="validation-banner validation-banner--warning" role="status">
+        <strong>媒体已通过验证，但检测到少量可恢复问题</strong>
+        <p>作品可以播放；个别位置在部分设备上可能短暂花屏、卡顿或出现声音异常。</p>
+      </div>
+    <% } else if ((video.playbackStrategy || video.playback_strategy) === 'native-hevc' && videoIsReady) { %>
+      <div class="validation-banner validation-banner--notice" role="status">
+        <strong>实验性 HEVC 作品</strong>
+        <p>当前优先使用设备的原生 HEVC 解码能力；不支持的浏览器暂时无法播放，客户端回退将在后续阶段加入。</p>
+      </div>
+    <% } %>
+
+    <% if (videoIsReady) { %>
     <section class="player-frame" aria-label="视频播放器">
       <video controls playsinline preload="metadata">
-        <source src="/videos/<%= videoId %>/media" type="video/mp4">
+        <source src="/videos/<%= videoId %>/media" type="<%= video.mediaType || video.media_type || 'video/mp4' %>">
         你的浏览器不支持 HTML5 视频播放。你可以<a href="/videos/<%= videoId %>/media">直接打开视频文件</a>。
       </video>
-      <div class="player-frame__caption" aria-hidden="true"><span>同见</span><span>OPEN VIDEO</span></div>
+      <div class="player-frame__caption" aria-hidden="true"><span>同见</span><span><%= mediaFormatLabel %></span></div>
     </section>
+    <% } else { %>
+      <section class="validation-state" data-validation-watch data-status-url="/api/videos/<%= videoId %>/status" data-current-status="<%= currentValidationStatus %>" aria-live="polite">
+        <span class="validation-state__signal" aria-hidden="true"></span>
+        <p class="eyebrow"><span></span> 发布前安全检查</p>
+        <h2 data-validation-label><%= validationView.label %></h2>
+        <% if (currentValidationStatus === 'pending' || currentValidationStatus === 'validating') { %>
+          <p>服务器正在遍历媒体结构并完整解码验证。验证期间文件不会出现在首页，也不能通过媒体地址访问。</p>
+          <small>页面会自动更新，你也可以稍后回来。</small>
+        <% } else if (currentValidationStatus === 'rejected') { %>
+          <p><%= validationSummary.message || '文件结构、编码组合或损坏程度不符合当前发布要求。' %></p>
+          <small>原始待验证文件已从服务器移除；你可以根据提示处理后重新上传。</small>
+        <% } else { %>
+          <p>验证服务暂时无法完成任务，这不表示你的文件有问题。</p>
+          <small>重启验证服务后会安全重试，待验证文件仍保留在隔离区。</small>
+        <% } %>
+      </section>
+    <% } %>
 
     <div class="video-information">
       <section class="work-description" aria-labelledby="about-work-title">
@@ -89,6 +128,8 @@
           <div><dt>创作者</dt><dd><%= video.creator %></dd></div>
           <% if (videoAccountLabel) { %><div><dt>发布账号</dt><dd><%= videoAccountLabel %><% if (videoAccountUsername && videoAccountUsername !== videoAccountLabel) { %> <span class="account-handle">@<%= videoAccountUsername %></span><% } %></dd></div><% } %>
           <% if (video.originalFilename || video.original_filename) { %><div><dt>原文件名</dt><dd><%= video.originalFilename || video.original_filename %></dd></div><% } %>
+          <% if (videoIsReady) { %><div><dt>媒体格式</dt><dd><%= mediaFormatLabel %></dd></div><% } %>
+          <% if (videoIsReady && (video.width || video.height)) { %><div><dt>画面尺寸</dt><dd><%= video.width %>×<%= video.height %></dd></div><% } %>
           <% if (formattedDate) { %><div><dt>发布时间</dt><dd><%= formattedDate %></dd></div><% } %>
         </dl>
       </section>
@@ -113,6 +154,7 @@
       </aside>
     </div>
 
+    <% if (videoIsReady) { %>
     <section class="discussion-section" aria-labelledby="discussion-title">
       <header class="section-heading discussion-section__heading">
         <div>
@@ -214,6 +256,7 @@
         </aside>
       </div>
     </section>
+    <% } %>
   </main>
 
   <%- include('partials/footer') %>

@@ -2,6 +2,7 @@ services:
   app:
     build:
       context: .
+      target: app
     image: tongjian-video-mvp:local
     restart: unless-stopped
     init: true
@@ -36,3 +37,49 @@ services:
       start_period: 10s
       retries: 3
     stop_grace_period: 15s
+
+  validator:
+    build:
+      context: .
+      target: validator
+    image: tongjian-video-validator:local
+    restart: unless-stopped
+    init: true
+    depends_on:
+      app:
+        condition: service_healthy
+    network_mode: none
+    environment:
+      NODE_ENV: production
+      DATABASE_PATH: /app/data/gongying.sqlite
+      VIDEO_STORAGE_PATH: /app/data/videos
+      MAX_VIDEO_DURATION_SECONDS: "${MAX_VIDEO_DURATION_SECONDS:-7200}"
+      MAX_VIDEO_WIDTH: "${MAX_VIDEO_WIDTH:-4096}"
+      MAX_VIDEO_HEIGHT: "${MAX_VIDEO_HEIGHT:-4096}"
+      MAX_VIDEO_PIXELS: "${MAX_VIDEO_PIXELS:-8847360}"
+      MAX_VIDEO_FPS: "${MAX_VIDEO_FPS:-120}"
+      MEDIA_DECODE_ERROR_RATE: "${MEDIA_DECODE_ERROR_RATE:-0.001}"
+      MEDIA_VALIDATION_POLL_MS: "${MEDIA_VALIDATION_POLL_MS:-1000}"
+      MEDIA_VALIDATION_STALE_MINUTES: "${MEDIA_VALIDATION_STALE_MINUTES:-30}"
+      MEDIA_VALIDATION_THREADS: "${MEDIA_VALIDATION_THREADS:-2}"
+      FFPROBE_PATH: /usr/bin/ffprobe
+      FFMPEG_PATH: /usr/bin/ffmpeg
+    volumes:
+      - ./data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777,noexec,nosuid,nodev
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    cpus: "${VALIDATOR_CPUS:-2.0}"
+    mem_limit: "${VALIDATOR_MEMORY_LIMIT:-1536m}"
+    memswap_limit: "${VALIDATOR_MEMORY_LIMIT:-1536m}"
+    pids_limit: "${VALIDATOR_PIDS_LIMIT:-64}"
+    oom_score_adj: 500
+    ulimits:
+      nofile:
+        soft: 256
+        hard: 256
+    stop_grace_period: 20s

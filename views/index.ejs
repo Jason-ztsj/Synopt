@@ -71,13 +71,15 @@
             const accountDisplayName = video.accountDisplayName || video.account_display_name || video.uploaderDisplayName || video.uploader_display_name || '';
             const accountUsername = video.accountUsername || video.account_username || video.uploaderUsername || video.uploader_username || '';
             const accountLabel = accountDisplayName || accountUsername;
+            const codecLabels = { avc: 'H.264', hevc: 'HEVC', vp9: 'VP9', av1: 'AV1', unknown: 'LEGACY' };
+            const formatLabel = `${codecLabels[video.videoCodec || video.video_codec] || 'VIDEO'} / ${(video.container || 'mp4').toUpperCase()}`;
           %>
             <article class="video-card">
               <a class="video-card__visual" href="/videos/<%= videoId %>" aria-label="播放《<%= video.title %>》">
                 <span class="video-card__number" aria-hidden="true"><%= String(index + 1).padStart(2, '0') %></span>
                 <span class="video-card__rings" aria-hidden="true"><i></i><i></i><i></i></span>
                 <span class="play-button" aria-hidden="true">▶</span>
-                <span class="video-card__format">MP4 / OPEN VIDEO</span>
+                <span class="video-card__format"><%= formatLabel %> / OPEN VIDEO</span>
               </a>
               <div class="video-card__body">
                 <div class="video-card__meta">
@@ -104,7 +106,7 @@
       <div class="principles__grid">
         <article><span aria-hidden="true">◎</span><h3>稳定身份</h3><p>观看始终开放；注册后使用持续账号发布与回应，不要求真实姓名。</p></article>
         <article><span aria-hidden="true">◇</span><h3>许可先行</h3><p>五种开放许可一目了然，让创作者与使用者都知道边界。</p></article>
-        <article><span aria-hidden="true">∿</span><h3>原样播放</h3><p>视频不经转码与改造，以你发布的 MP4 文件直接呈现。</p></article>
+        <article><span aria-hidden="true">∿</span><h3>原码流通</h3><p>浏览器只在需要时无损重封装，服务器验证完整性，但不会重新编码你的画面与声音。</p></article>
       </div>
     </section>
   </main>
