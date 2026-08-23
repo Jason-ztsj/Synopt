@@ -95,6 +95,7 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
     port,
     databasePath,
     videoStoragePath,
+    coverStoragePath: path.join(path.dirname(videoStoragePath), 'covers'),
     temporaryStoragePath: path.join(videoStoragePath, '.tmp'),
     pendingStoragePath: path.join(videoStoragePath, '.pending'),
     maxUploadMb,

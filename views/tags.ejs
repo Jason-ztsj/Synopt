@@ -1,0 +1,14 @@
+<%- include('partials/head', { pageTitle: '标签｜同见', pageDescription: '通过创作者添加的标签发现开放长视频。' }) %>
+<body class="page page--information">
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  <%- include('partials/header', { currentPath: '/tags' }) %>
+  <div class="app-shell shell">
+    <%- include('partials/sidebar', { currentPath: '/tags', categoryTree: categoryTree }) %>
+    <main id="main-content" class="information-main" tabindex="-1">
+      <header class="directory-heading"><p class="eyebrow"><span></span> 作品索引</p><h1>标签</h1><p>标签由发布者添加，用来表达分类之外更具体的主题。</p></header>
+      <% if (!popularTags.length) { %><div class="empty-state empty-state--catalog"><h2>还没有标签</h2><p>发布带标签的视频后，它们会出现在这里。</p></div><% } else { %><div class="tag-directory"><% popularTags.forEach(function(tag) { %><a href="/tags/<%= tag.slug %>"><strong>#<%= tag.name %></strong><span><%= tag.videoCount %> 段视频</span></a><% }); %></div><% } %>
+    </main>
+  </div>
+  <%- include('partials/footer') %>
+</body>
+</html>

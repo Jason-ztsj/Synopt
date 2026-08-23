@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { readdir, rename, stat, unlink } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
@@ -8,6 +9,7 @@ import { openDatabase } from './database.js';
 import {
   MediaRejectedError,
   MediaValidationSystemError,
+  runBoundedProcess,
   validateMediaFile
 } from './media-validator.js';
 
@@ -31,6 +33,7 @@ async function removeOldUntrackedFiles(directory, {
   cutoffMs,
   suffix
 } = {}) {
+  if (!directory) return 0;
   let entries;
   try {
     entries = await readdir(directory, { withFileTypes: true });
@@ -68,7 +71,53 @@ export async function cleanupOrphanedUploads(database, config, nowDate = new Dat
     cutoffMs: nowDate.getTime() - 60 * 60_000,
     suffix: '.upload'
   });
-  return pendingRemoved + temporaryRemoved;
+  const coverRemoved = await removeOldUntrackedFiles(config.coverStoragePath, {
+    trackedNames: new Set(database.listCoverStorageNames?.() ?? []),
+    cutoffMs: nowDate.getTime() - 60 * 60_000
+  });
+  return pendingRemoved + temporaryRemoved + coverRemoved;
+}
+
+export async function generateFirstFrameCover(filePath, config) {
+  const storageName = `${crypto.randomUUID()}.jpg`;
+  const outputPath = storagePath(config.coverStoragePath, storageName);
+  const result = await runBoundedProcess(config.ffmpegPath, [
+    '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
+    '-i', filePath,
+    '-map', '0:v:0', '-frames:v', '1',
+    '-vf', 'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2:black,setsar=1',
+    '-q:v', '2', outputPath
+  ], { timeoutMs: 60_000, maxStdoutBytes: 64 * 1024, maxStderrBytes: 128 * 1024 });
+  if (result.timedOut || result.signal || result.code !== 0) {
+    await removeIfPresent(outputPath);
+    throw new MediaValidationSystemError('无法从视频第一帧生成封面', 'COVER_GENERATION_FAILED', {
+      exitCode: result.code,
+      signal: result.signal
+    });
+  }
+  const outputStat = await stat(outputPath);
+  if (!outputStat.isFile() || outputStat.size < 24) {
+    await removeIfPresent(outputPath);
+    throw new MediaValidationSystemError('生成的封面文件无效', 'COVER_GENERATION_INVALID');
+  }
+  return { storageName, mediaType: 'image/jpeg', source: 'generated' };
+}
+
+export async function backfillMissingCovers(database, config, {
+  generateCover = generateFirstFrameCover
+} = {}) {
+  if (typeof database.listVideosMissingCover !== 'function' || typeof database.setVideoCover !== 'function') return 0;
+  let completed = 0;
+  for (const video of database.listVideosMissingCover()) {
+    try {
+      const filePath = storagePath(config.videoStoragePath, video.storageName);
+      const cover = await generateCover(filePath, config);
+      if (database.setVideoCover(video.id, cover) === 1) completed += 1;
+    } catch (error) {
+      console.warn(`旧视频封面补全失败：${video.id} (${error.code || error.message})`);
+    }
+  }
+  return completed;
 }
 
 function existingCandidate(pendingPath, finalPath) {
@@ -79,6 +128,7 @@ function existingCandidate(pendingPath, finalPath) {
 
 export async function processNextValidation(database, config, {
   validate = validateMediaFile,
+  generateCover = generateFirstFrameCover,
   now = () => new Date()
 } = {}) {
   const startedAt = now().toISOString();
@@ -91,7 +141,12 @@ export async function processNextValidation(database, config, {
   try {
     candidatePath = existingCandidate(pendingPath, finalPath);
     const result = await validate(candidatePath, video.mediaType, config);
+    let generatedCover = null;
+    if (!video.coverStorageName && typeof database.setVideoCover === 'function') {
+      generatedCover = await generateCover(candidatePath, config);
+    }
     if (candidatePath === pendingPath) await rename(pendingPath, finalPath);
+    if (generatedCover) database.setVideoCover(video.id, generatedCover);
     const changed = database.completeVideoValidation(video.id, result, now().toISOString());
     if (changed !== 1) {
       throw new MediaValidationSystemError('验证完成时数据库状态已改变', 'VALIDATION_STATE_CONFLICT');
@@ -102,6 +157,9 @@ export async function processNextValidation(database, config, {
     if (error instanceof MediaRejectedError) {
       await removeIfPresent(candidatePath ?? pendingPath);
       if (candidatePath === finalPath) await removeIfPresent(finalPath);
+      if (video.coverStorageName && config.coverStoragePath) {
+        await removeIfPresent(storagePath(config.coverStoragePath, video.coverStorageName));
+      }
       database.rejectVideoValidation(video.id, error.summary, finishedAt);
       console.warn(`媒体验证拒绝：${video.id} (${error.code})`);
       return true;
@@ -125,12 +183,15 @@ export async function runValidatorWorker({
 } = {}) {
   fs.mkdirSync(config.videoStoragePath, { recursive: true });
   fs.mkdirSync(config.pendingStoragePath, { recursive: true });
+  if (config.coverStoragePath) fs.mkdirSync(config.coverStoragePath, { recursive: true });
   const startupTime = now();
   const orphanCount = await cleanupOrphanedUploads(database, config, startupTime);
   if (orphanCount > 0) console.warn(`已清理 ${orphanCount} 个中断上传留下的隔离文件`);
   const cutoff = new Date(startupTime.getTime() - config.mediaValidationStaleMs).toISOString();
   const recovered = database.resetStaleValidations(cutoff) + database.retryFailedValidations();
   if (recovered > 0) console.log(`已恢复 ${recovered} 个未完成的媒体验证任务`);
+  const coversBackfilled = await backfillMissingCovers(database, config);
+  if (coversBackfilled > 0) console.log(`已为 ${coversBackfilled} 个既有视频补全第一帧封面`);
   const staleSweepIntervalMs = Math.min(60_000, Math.max(1_000, config.mediaValidationPollMs * 10));
   let nextStaleSweepAt = startupTime.getTime() + staleSweepIntervalMs;
 

@@ -1,0 +1,30 @@
+<%- include('partials/head', { pageTitle: '关于｜同见', pageDescription: '同见的宗旨、原则与实验边界。' }) %>
+<body class="page page--information">
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  <%- include('partials/header', { currentPath: '/about' }) %>
+  <div class="app-shell shell">
+    <%- include('partials/sidebar', { currentPath: '/about', categoryTree: categoryTree }) %>
+    <main id="main-content" class="information-main" tabindex="-1">
+      <header class="information-hero">
+        <p class="eyebrow"><span></span> 关于同见</p>
+        <h1>让影像自由流动，<br><em>让创作彼此照亮。</em></h1>
+        <p>同见是一个面向开放知识与非营利视频分享的实验：让值得长期观看的横屏视频拥有清晰许可、稳定地址和认真讨论的空间。</p>
+      </header>
+      <section class="information-section">
+        <h2>共同约定</h2>
+        <div class="principle-list">
+          <article><span>01</span><div><h3>创作者保有选择</h3><p>每段作品都附带明确的开放许可，创作者与使用者都能理解边界。</p></div></article>
+          <article><span>02</span><div><h3>观看不交换隐私</h3><p>不以跨站追踪、行为序列或隐形用户画像换取所谓“更懂你”的推荐。</p></div></article>
+          <article><span>03</span><div><h3>讨论回到内容</h3><p>讨论围绕具体作品展开，支持有标题的主题与可追溯的回复关系。</p></div></article>
+          <article><span>04</span><div><h3>规则可以被检查</h3><p>排序公式、参数和使用的数据公开展示，实际代码与说明保持一致。</p></div></article>
+        </div>
+      </section>
+      <section class="information-section information-section--note">
+        <h2>当前边界</h2>
+        <p>项目目前只是技术和产品尝试，没有实际运营计划，也尚未具备面向公网所需的审核、举报、申诉、账号恢复和运营保障能力。</p>
+      </section>
+    </main>
+  </div>
+  <%- include('partials/footer') %>
+</body>
+</html>

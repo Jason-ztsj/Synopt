@@ -1,0 +1,32 @@
+<%- include('partials/head', { pageTitle: '算法｜同见', pageDescription: '公开同见当前实际使用的排序规则、参数与数据边界。' }) %>
+<body class="page page--information">
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  <%- include('partials/header', { currentPath: '/algorithm' }) %>
+  <div class="app-shell shell">
+    <%- include('partials/sidebar', { currentPath: '/algorithm', categoryTree: categoryTree }) %>
+    <main id="main-content" class="information-main" tabindex="-1">
+      <header class="information-hero information-hero--compact">
+        <p class="eyebrow"><span></span> 透明排序</p>
+        <h1>算法应该是公开规则，<br><em>不是看不见的操纵。</em></h1>
+        <p>本页只描述当前真正运行的排序。计划中的能力会明确标注，不会冒充已经上线的功能。</p>
+      </header>
+      <section class="algorithm-status" aria-labelledby="active-ranking-title">
+        <div class="algorithm-status__badge">当前生效 · v1</div>
+        <h2 id="active-ranking-title">首页与搜索结果：按发布时间倒序</h2>
+        <pre><code>ORDER BY created_at DESC, id DESC</code></pre>
+        <dl>
+          <div><dt>参数</dt><dd>无</dd></div>
+          <div><dt>使用的数据</dt><dd>作品发布时间；同一时间下使用作品 ID 保持结果稳定</dd></div>
+          <div><dt>不使用的数据</dt><dd>观看历史、停留时长、点击序列、设备指纹、关注关系和用户画像</dd></div>
+          <div><dt>个性化</dt><dd>当前没有个性化推荐</dd></div>
+        </dl>
+      </section>
+      <section class="information-section">
+        <h2>计划中的方向</h2>
+        <p>未来可以加入带时间衰减的公共热度排序，以及依据用户主动关注、屏蔽标签和本地聚合偏好的可选排序。具体公式上线前会先公开版本、参数、示例和变更记录。</p>
+      </section>
+    </main>
+  </div>
+  <%- include('partials/footer') %>
+</body>
+</html>

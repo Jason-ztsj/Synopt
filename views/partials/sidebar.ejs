@@ -1,0 +1,40 @@
+<%
+  const sidebarPath = typeof currentPath === 'string' ? currentPath : '';
+  const sidebarCategories = typeof categoryTree !== 'undefined' && Array.isArray(categoryTree) ? categoryTree : [];
+%>
+<aside class="app-sidebar" aria-label="网站菜单" data-sidebar>
+  <div class="app-sidebar__intro">
+    <strong>同见</strong>
+    <p>开放许可、公共讨论与透明排序的长视频共同体。</p>
+    <a href="/about">了解平台</a>
+  </div>
+  <nav class="side-navigation">
+    <section>
+      <h2>快速访问</h2>
+      <a href="/"<% if (sidebarPath === '/') { %> aria-current="page"<% } %>><span aria-hidden="true">⌂</span>首页</a>
+      <a href="/categories"<% if (sidebarPath.startsWith('/categories')) { %> aria-current="page"<% } %>><span aria-hidden="true">▦</span>全部分类</a>
+      <a href="/tags"<% if (sidebarPath.startsWith('/tags')) { %> aria-current="page"<% } %>><span aria-hidden="true">#</span>标签</a>
+    </section>
+    <% if (sidebarCategories.length) { %>
+      <section>
+        <h2>内容分类</h2>
+        <% sidebarCategories.forEach(function(category) { %>
+          <details class="side-category"<% if (category.children && category.children.some(function(child) { return sidebarPath === '/categories/' + child.slug; })) { %> open<% } %>>
+            <summary><span><%= category.name %></span><small><%= category.videoCount || 0 %></small></summary>
+            <div>
+              <a href="/categories/<%= category.slug %>">全部</a>
+              <% (category.children || []).forEach(function(child) { %>
+                <a href="/categories/<%= child.slug %>"<% if (sidebarPath === '/categories/' + child.slug) { %> aria-current="page"<% } %>><%= child.name %><small><%= child.videoCount || 0 %></small></a>
+              <% }); %>
+            </div>
+          </details>
+        <% }); %>
+      </section>
+    <% } %>
+    <section>
+      <h2>平台透明度</h2>
+      <a href="/algorithm"<% if (sidebarPath === '/algorithm') { %> aria-current="page"<% } %>><span aria-hidden="true">ƒ</span>算法</a>
+      <a href="/about"<% if (sidebarPath === '/about') { %> aria-current="page"<% } %>><span aria-hidden="true">○</span>关于</a>
+    </section>
+  </nav>
+</aside>

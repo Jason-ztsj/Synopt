@@ -6,6 +6,9 @@ export const FIELD_LIMITS = Object.freeze({
   creator: 80,
   description: 2000,
   discussion: 5000,
+  discussionTitle: 120,
+  tag: 32,
+  tagCount: 8,
   usernameMin: 3,
   username: 32,
   displayName: 40,
@@ -35,6 +38,53 @@ export function validateVideoFields(input = {}) {
 
 export function validateDiscussionBody(value) {
   return validateText(value, { name: '讨论正文', required: true, max: FIELD_LIMITS.discussion });
+}
+
+export function validateDiscussionTitle(value, { required = true } = {}) {
+  return validateText(value, { name: '讨论标题', required, max: FIELD_LIMITS.discussionTitle });
+}
+
+export function validateCategorySlug(value) {
+  const slug = textValue(value).toLowerCase();
+  if (!slug) throw new ValidationError('请选择视频分类');
+  if (!/^[a-z0-9][a-z0-9-]{0,47}$/.test(slug)) throw new ValidationError('视频分类无效');
+  return slug;
+}
+
+function tagSlug(name) {
+  return name.normalize('NFKC').toLocaleLowerCase('zh-CN')
+    .replace(/[\s_]+/gu, '-')
+    .replace(/[^\p{L}\p{N}-]+/gu, '')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+export function validateTags(value) {
+  const rawValues = Array.isArray(value) ? value : String(value ?? '').split(/[,，]/u);
+  const tags = [];
+  const seen = new Set();
+  for (const raw of rawValues) {
+    const name = textValue(raw).normalize('NFC');
+    if (!name) continue;
+    if (Array.from(name).length > FIELD_LIMITS.tag) {
+      throw new ValidationError(`每个标签不能超过 ${FIELD_LIMITS.tag} 个字符`);
+    }
+    const slug = tagSlug(name);
+    if (!slug || Array.from(slug).length > 48) throw new ValidationError(`标签“${name}”格式无效`);
+    if (seen.has(slug)) continue;
+    seen.add(slug);
+    tags.push({ slug, name });
+  }
+  if (tags.length > FIELD_LIMITS.tagCount) {
+    throw new ValidationError(`每个视频最多添加 ${FIELD_LIMITS.tagCount} 个标签`);
+  }
+  return tags;
+}
+
+export function validateVoteValue(value) {
+  const parsed = Number(value);
+  if (![1, 0, -1].includes(parsed)) throw new ValidationError('投票值无效');
+  return parsed;
 }
 
 export function validateUsername(value) {

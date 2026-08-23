@@ -1,264 +1,101 @@
 <%
-  const videoId = video.id || video.uuid;
-  const safeLicense = typeof license !== 'undefined' && license && typeof license === 'object' ? license : null;
-  const rawLicenseCode = (safeLicense && (safeLicense.id || safeLicense.code)) || video.licenseCode || video.license_code || video.license || 'CC BY 4.0';
-  const normalizedLicenseCode = String(rawLicenseCode).toUpperCase().replace(/_/g, '-').replace(/\s+/g, '-').replace(/^CC-/, 'CC-');
-  const licenseCatalog = {
-    'CC0': { code: 'CC0 1.0', name: 'CC0 1.0 通用', url: 'https://creativecommons.org/publicdomain/zero/1.0/deed.zh-hans', summary: '创作者尽可能放弃此作品的版权及相关权利，将其贡献给公共领域。任何人都可以自由复制、修改、传播和使用，无需署名。', cc0: true },
-    'CC0-1.0': { code: 'CC0 1.0', name: 'CC0 1.0 通用', url: 'https://creativecommons.org/publicdomain/zero/1.0/deed.zh-hans', summary: '创作者尽可能放弃此作品的版权及相关权利，将其贡献给公共领域。任何人都可以自由复制、修改、传播和使用，无需署名。', cc0: true },
-    'CC-BY': { code: 'CC BY 4.0', name: '知识共享 署名 4.0', url: 'https://creativecommons.org/licenses/by/4.0/deed.zh-hans', summary: '你可以复制、传播、修改并将作品用于商业用途，但必须标明创作者。' },
-    'CC-BY-4.0': { code: 'CC BY 4.0', name: '知识共享 署名 4.0', url: 'https://creativecommons.org/licenses/by/4.0/deed.zh-hans', summary: '你可以复制、传播、修改并将作品用于商业用途，但必须标明创作者。' },
-    'CC-BY-NC': { code: 'CC BY-NC 4.0', name: '知识共享 署名—非商业性使用 4.0', url: 'https://creativecommons.org/licenses/by-nc/4.0/deed.zh-hans', summary: '你可以复制、传播和修改作品，但必须标明创作者，且不得用于商业目的。' },
-    'CC-BY-NC-4.0': { code: 'CC BY-NC 4.0', name: '知识共享 署名—非商业性使用 4.0', url: 'https://creativecommons.org/licenses/by-nc/4.0/deed.zh-hans', summary: '你可以复制、传播和修改作品，但必须标明创作者，且不得用于商业目的。' },
-    'CC-BY-ND': { code: 'CC BY-ND 4.0', name: '知识共享 署名—禁止演绎 4.0', url: 'https://creativecommons.org/licenses/by-nd/4.0/deed.zh-hans', summary: '你可以复制和传播原作，包括用于商业目的，但必须标明创作者且不得修改作品。' },
-    'CC-BY-ND-4.0': { code: 'CC BY-ND 4.0', name: '知识共享 署名—禁止演绎 4.0', url: 'https://creativecommons.org/licenses/by-nd/4.0/deed.zh-hans', summary: '你可以复制和传播原作，包括用于商业目的，但必须标明创作者且不得修改作品。' },
-    'CC-BY-NC-ND': { code: 'CC BY-NC-ND 4.0', name: '知识共享 署名—非商业性使用—禁止演绎 4.0', url: 'https://creativecommons.org/licenses/by-nc-nd/4.0/deed.zh-hans', summary: '你可以复制和传播原作，但必须标明创作者，不得用于商业目的，也不得修改作品。' },
-    'CC-BY-NC-ND-4.0': { code: 'CC BY-NC-ND 4.0', name: '知识共享 署名—非商业性使用—禁止演绎 4.0', url: 'https://creativecommons.org/licenses/by-nc-nd/4.0/deed.zh-hans', summary: '你可以复制和传播原作，但必须标明创作者，不得用于商业目的，也不得修改作品。' }
-  };
-  const fallbackLicense = licenseCatalog['CC-BY-4.0'];
-  const catalogLicense = licenseCatalog[normalizedLicenseCode] || licenseCatalog[normalizedLicenseCode.replace(/-4\.0$/, '')] || fallbackLicense;
-  const licenseView = {
-    code: (safeLicense && (safeLicense.label || safeLicense.code)) || catalogLicense.code,
-    name: (safeLicense && safeLicense.name) || catalogLicense.name,
-    url: (safeLicense && safeLicense.url) || catalogLicense.url,
-    summary: (safeLicense && (safeLicense.summary || safeLicense.description)) || catalogLicense.summary,
-    cc0: (safeLicense && typeof safeLicense.cc0 === 'boolean') ? safeLicense.cc0 : Boolean(catalogLicense.cc0)
-  };
+  const videoId = video.id;
   const description = typeof video.description === 'string' ? video.description.trim() : '';
-  const createdValue = video.createdAt || video.created_at;
-  let formattedDate = '';
-  if (createdValue) {
-    const parsedDate = new Date(createdValue);
-    formattedDate = Number.isNaN(parsedDate.getTime())
-      ? String(createdValue)
-      : new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(parsedDate);
-  }
-  const safeDiscussions = typeof discussions !== 'undefined' && Array.isArray(discussions) ? discussions : [];
-  const safeDiscussionError = typeof discussionError !== 'undefined' ? discussionError : null;
-  const discussionErrorMessage = typeof safeDiscussionError === 'string' ? safeDiscussionError : (safeDiscussionError && safeDiscussionError.message ? safeDiscussionError.message : '');
-  const videoCurrentUser = typeof currentUser !== 'undefined' && currentUser && typeof currentUser === 'object' ? currentUser : null;
-  const currentDisplayName = videoCurrentUser ? (videoCurrentUser.displayName || videoCurrentUser.display_name || videoCurrentUser.username || '用户') : '';
-  const currentUsername = videoCurrentUser ? (videoCurrentUser.username || '') : '';
-  const videoAccountDisplayName = video.accountDisplayName || video.account_display_name || video.uploaderDisplayName || video.uploader_display_name || '';
-  const videoAccountUsername = video.accountUsername || video.account_username || video.uploaderUsername || video.uploader_username || '';
-  const videoAccountLabel = videoAccountDisplayName || videoAccountUsername;
+  const ready = ['ready', 'ready_with_warnings'].includes(video.validationStatus);
+  const user = typeof currentUser !== 'undefined' && currentUser ? currentUser : null;
   const safeCsrfToken = typeof csrfToken === 'string' ? csrfToken : '';
-  const currentValidationStatus = video.validationStatus || video.validation_status || 'ready';
-  const videoIsReady = currentValidationStatus === 'ready' || currentValidationStatus === 'ready_with_warnings';
-  const validationView = typeof validationStatus === 'object' && validationStatus ? validationStatus : { label: currentValidationStatus };
-  const validationSummary = video.validationSummary || video.validation_summary || {};
-  const videoCodecLabels = { avc: 'H.264', hevc: 'HEVC', vp9: 'VP9', av1: 'AV1', unknown: '历史媒体' };
-  const audioCodecLabels = { aac: 'AAC', opus: 'Opus', unknown: '未知音频' };
-  const videoCodecLabel = videoCodecLabels[video.videoCodec || video.video_codec] || (video.videoCodec || video.video_codec || '未知编码');
-  const audioCodecValue = video.audioCodec || video.audio_codec;
-  const mediaFormatLabel = `${videoCodecLabel}${audioCodecValue ? ' + ' + (audioCodecLabels[audioCodecValue] || audioCodecValue) : ''} · ${(video.container || 'mp4').toUpperCase()}`;
+  const safeTree = typeof discussionTree !== 'undefined' && Array.isArray(discussionTree) ? discussionTree : [];
+  const discussionCount = Array.isArray(discussions) ? discussions.length : 0;
+  const errorMessage = typeof discussionError === 'string' ? discussionError : '';
+  const publisher = video.accountDisplayName || video.accountUsername || '';
+  const created = video.createdAt ? new Date(video.createdAt) : null;
+  const formattedDate = created && !Number.isNaN(created.getTime())
+    ? new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' }).format(created)
+    : '';
+  const duration = Number(video.durationSeconds);
+  const durationText = Number.isFinite(duration)
+    ? (duration >= 3600
+      ? Math.floor(duration / 3600) + ' 小时 ' + Math.floor((duration % 3600) / 60) + ' 分钟'
+      : (duration < 60 ? '不到 1 分钟' : Math.floor(duration / 60) + ' 分钟'))
+    : '';
+  const formatLabel = `${({ avc: 'H.264', hevc: 'HEVC', vp9: 'VP9', av1: 'AV1', unknown: '历史媒体' })[video.videoCodec] || video.videoCodec}${video.audioCodec ? ' + ' + video.audioCodec.toUpperCase() : ''} · ${(video.container || 'mp4').toUpperCase()}`;
+  const discussionDate = function(value) {
+    const date = value ? new Date(value) : null;
+    return date && !Number.isNaN(date.getTime())
+      ? new Intl.DateTimeFormat('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date)
+      : '';
+  };
+  const plainPreview = function(value) {
+    return String(value || '').replace(/[`*_>#\[\]$]/g, '').replace(/\s+/g, ' ').trim().slice(0, 140);
+  };
 %>
 <%- include('partials/head', {
   pageTitle: video.title + '｜同见',
   pageDescription: description || ('观看 ' + video.creator + ' 创作的《' + video.title + '》。'),
-  includeMathEditor: Boolean(videoCurrentUser)
+  includeMathEditor: Boolean(user)
 }) %>
-<body class="page page--video">
+<body class="page page--video-detail">
   <a class="skip-link" href="#main-content">跳到主要内容</a>
   <%- include('partials/header', { currentPath: '' }) %>
+  <div class="app-shell shell">
+    <%- include('partials/sidebar', { currentPath: '', categoryTree: categoryTree }) %>
+    <main id="main-content" class="video-detail" tabindex="-1">
+      <a class="detail-back" href="/">← 返回视频目录</a>
 
-  <main id="main-content" class="shell video-page" tabindex="-1">
-    <a class="back-link" href="/"><span aria-hidden="true">←</span> 返回放映室</a>
+      <% if (video.validationStatus === 'ready_with_warnings') { %><div class="validation-banner validation-banner--warning" role="status"><strong>媒体已通过验证，但检测到少量可恢复问题</strong><p>个别位置在部分设备上可能短暂花屏、卡顿或出现声音异常。</p></div><% } %>
 
-    <header class="video-heading">
-      <div class="video-heading__meta">
-        <span class="license-pill"><%= licenseView.code %></span>
-        <% if (formattedDate) { %><time datetime="<%= createdValue %>"><%= formattedDate %></time><% } %>
-      </div>
-      <h1><%= video.title %></h1>
-      <p>一段由 <strong><%= video.creator %></strong> 创作并开放分享的影像</p>
-      <% if (videoAccountLabel) { %>
-        <p class="video-heading__publisher">发布者：<strong><%= videoAccountLabel %></strong><% if (videoAccountUsername && videoAccountUsername !== videoAccountLabel) { %> <span>@<%= videoAccountUsername %></span><% } %></p>
+      <% if (ready) { %>
+        <section class="longform-player" aria-label="视频播放器">
+          <video controls playsinline preload="metadata"<% if (video.coverStorageName) { %> poster="/videos/<%= videoId %>/cover"<% } %>>
+            <source src="/videos/<%= videoId %>/media" type="<%= video.mediaType %>">
+            你的浏览器不支持播放此视频。<a href="/videos/<%= videoId %>/media">直接打开视频文件</a>。
+          </video>
+        </section>
+      <% } else { %>
+        <section class="validation-state" data-validation-watch data-status-url="/api/videos/<%= videoId %>/status" data-current-status="<%= video.validationStatus %>" aria-live="polite"><span class="validation-state__signal" aria-hidden="true"></span><p class="eyebrow"><span></span> 发布前安全检查</p><h2 data-validation-label><%= validationStatus.label %></h2><p><%= video.validationStatus === 'rejected' ? (video.validationSummary.message || '文件没有通过完整媒体验证。') : '服务器正在遍历媒体结构并完整解码；完成前不会公开。' %></p></section>
       <% } %>
-    </header>
 
-    <% if (currentValidationStatus === 'ready_with_warnings') { %>
-      <div class="validation-banner validation-banner--warning" role="status">
-        <strong>媒体已通过验证，但检测到少量可恢复问题</strong>
-        <p>作品可以播放；个别位置在部分设备上可能短暂花屏、卡顿或出现声音异常。</p>
-      </div>
-    <% } else if ((video.playbackStrategy || video.playback_strategy) === 'native-hevc' && videoIsReady) { %>
-      <div class="validation-banner validation-banner--notice" role="status">
-        <strong>实验性 HEVC 作品</strong>
-        <p>当前优先使用设备的原生 HEVC 解码能力；不支持的浏览器暂时无法播放，客户端回退将在后续阶段加入。</p>
-      </div>
-    <% } %>
-
-    <% if (videoIsReady) { %>
-    <section class="player-frame" aria-label="视频播放器">
-      <video controls playsinline preload="metadata">
-        <source src="/videos/<%= videoId %>/media" type="<%= video.mediaType || video.media_type || 'video/mp4' %>">
-        你的浏览器不支持 HTML5 视频播放。你可以<a href="/videos/<%= videoId %>/media">直接打开视频文件</a>。
-      </video>
-      <div class="player-frame__caption" aria-hidden="true"><span>同见</span><span><%= mediaFormatLabel %></span></div>
-    </section>
-    <% } else { %>
-      <section class="validation-state" data-validation-watch data-status-url="/api/videos/<%= videoId %>/status" data-current-status="<%= currentValidationStatus %>" aria-live="polite">
-        <span class="validation-state__signal" aria-hidden="true"></span>
-        <p class="eyebrow"><span></span> 发布前安全检查</p>
-        <h2 data-validation-label><%= validationView.label %></h2>
-        <% if (currentValidationStatus === 'pending' || currentValidationStatus === 'validating') { %>
-          <p>服务器正在遍历媒体结构并完整解码验证。验证期间文件不会出现在首页，也不能通过媒体地址访问。</p>
-          <small>页面会自动更新，你也可以稍后回来。</small>
-        <% } else if (currentValidationStatus === 'rejected') { %>
-          <p><%= validationSummary.message || '文件结构、编码组合或损坏程度不符合当前发布要求。' %></p>
-          <small>原始待验证文件已从服务器移除；你可以根据提示处理后重新上传。</small>
-        <% } else { %>
-          <p>验证服务暂时无法完成任务，这不表示你的文件有问题。</p>
-          <small>重启验证服务后会安全重试，待验证文件仍保留在隔离区。</small>
-        <% } %>
-      </section>
-    <% } %>
-
-    <div class="video-information">
-      <section class="work-description" aria-labelledby="about-work-title">
-        <p class="eyebrow"><span></span> 关于作品</p>
-        <h2 id="about-work-title">作品说明</h2>
-        <% if (description) { %>
-          <p class="work-description__text"><%= description %></p>
-        <% } else { %>
-          <p class="work-description__empty">创作者没有留下更多说明。让画面自己说话吧。</p>
-        <% } %>
-        <dl class="work-facts">
-          <div><dt>创作者</dt><dd><%= video.creator %></dd></div>
-          <% if (videoAccountLabel) { %><div><dt>发布账号</dt><dd><%= videoAccountLabel %><% if (videoAccountUsername && videoAccountUsername !== videoAccountLabel) { %> <span class="account-handle">@<%= videoAccountUsername %></span><% } %></dd></div><% } %>
-          <% if (video.originalFilename || video.original_filename) { %><div><dt>原文件名</dt><dd><%= video.originalFilename || video.original_filename %></dd></div><% } %>
-          <% if (videoIsReady) { %><div><dt>媒体格式</dt><dd><%= mediaFormatLabel %></dd></div><% } %>
-          <% if (videoIsReady && (video.width || video.height)) { %><div><dt>画面尺寸</dt><dd><%= video.width %>×<%= video.height %></dd></div><% } %>
-          <% if (formattedDate) { %><div><dt>发布时间</dt><dd><%= formattedDate %></dd></div><% } %>
-        </dl>
-      </section>
-
-      <aside class="license-card<% if (licenseView.cc0) { %> license-card--cc0<% } %>" aria-labelledby="license-card-title">
-        <div class="license-card__header">
-          <span>开放许可 / LICENSE</span>
-          <strong><%= licenseView.code %></strong>
+      <header class="watch-heading">
+        <div class="watch-heading__context"><% if (video.categoryName) { %><a href="/categories/<%= video.categorySlug %>"><%= video.categoryName %></a><span>·</span><% } %><span><%= formattedDate %></span><% if (durationText) { %><span>·</span><span><%= durationText %></span><% } %></div>
+        <h1><%= video.title %></h1>
+        <div class="watch-heading__row">
+          <div class="creator-line"><span class="creator-line__avatar" aria-hidden="true"><%= Array.from(String(publisher || video.creator))[0] || '同' %></span><p><strong><%= video.creator %></strong><% if (publisher) { %><small>由 <%= publisher %> 发布</small><% } %></p></div>
+          <div class="reaction-group" aria-label="视频评价">
+            <% if (user) { %>
+              <form action="/videos/<%= videoId %>/vote" method="post" data-vote-form><input type="hidden" name="_csrf" value="<%= safeCsrfToken %>"><button type="submit" name="value" value="<%= video.viewerVote === 1 ? 0 : 1 %>" class="reaction-button<% if (video.viewerVote === 1) { %> is-active<% } %>">认同 <strong data-upvotes><%= video.upvoteCount %></strong></button></form>
+              <form action="/videos/<%= videoId %>/vote" method="post" data-vote-form><input type="hidden" name="_csrf" value="<%= safeCsrfToken %>"><button type="submit" name="value" value="<%= video.viewerVote === -1 ? 0 : -1 %>" class="reaction-button<% if (video.viewerVote === -1) { %> is-active is-negative<% } %>">反对 <strong data-downvotes><%= video.downvoteCount %></strong></button></form>
+            <% } else { %><a class="reaction-button" href="/login?next=<%= encodeURIComponent('/videos/' + videoId) %>">认同 <strong><%= video.upvoteCount %></strong></a><a class="reaction-button" href="/login?next=<%= encodeURIComponent('/videos/' + videoId) %>">反对 <strong><%= video.downvoteCount %></strong></a><% } %>
+          </div>
         </div>
-        <div class="license-card__seal" aria-hidden="true"><span>CC</span></div>
-        <h2 id="license-card-title"><%= licenseView.name %></h2>
-        <p><%= licenseView.summary %></p>
-        <p class="license-card__credit">
-          <% if (licenseView.cc0) { %>
-            <strong>署名信息：</strong><%= video.creator %>。CC0 使用者无需署名，但同见仍保留创作者记录。
-          <% } else { %>
-            使用时请署名：<strong><%= video.creator %></strong>
-          <% } %>
-        </p>
-        <% if (licenseView.cc0) { %><p class="license-card__public-domain">这是尽可能放弃版权的公共领域工具，而非要求署名的版权许可。</p><% } %>
-        <a href="<%= licenseView.url %>" target="_blank" rel="license noopener">查看官方许可文本 <span aria-hidden="true">↗</span></a>
-      </aside>
-    </div>
-
-    <% if (videoIsReady) { %>
-    <section class="discussion-section" aria-labelledby="discussion-title">
-      <header class="section-heading discussion-section__heading">
-        <div>
-          <p class="eyebrow"><span></span> 围绕作品</p>
-          <h2 id="discussion-title">讨论与回应</h2>
-        </div>
-        <p class="section-heading__count"><strong><%= safeDiscussions.length %></strong> 条讨论</p>
+        <% if (video.tags.length) { %><div class="tag-row"><% video.tags.forEach(function(tag) { %><a href="/tags/<%= tag.slug %>">#<%= tag.name %></a><% }); %></div><% } %>
       </header>
 
-      <div class="discussion-layout">
-        <div class="discussion-list" id="discussion-list">
-          <% if (safeDiscussions.length === 0) { %>
-            <div class="discussion-empty">
-              <span aria-hidden="true">“</span>
-              <h3>还没有人写下回应</h3>
-              <p>从一个画面、一段声音，或一个未解的问题开始。</p>
-            </div>
-          <% } else { %>
-            <% safeDiscussions.forEach(function(discussion, index) {
-              const accountDisplayName = discussion.accountDisplayName || discussion.account_display_name || '';
-              const accountUsername = discussion.accountUsername || discussion.account_username || '';
-              const nickname = accountDisplayName || accountUsername || discussion.nickname || discussion.author || '历史匿名观众';
-              const renderedBody = discussion.renderedBody || discussion.rendered_body || discussion.bodyHtml || discussion.body_html || discussion.html || '';
-              const discussionCreated = discussion.createdAt || discussion.created_at;
-              let discussionDate = '';
-              if (discussionCreated) {
-                const parsedDiscussionDate = new Date(discussionCreated);
-                discussionDate = Number.isNaN(parsedDiscussionDate.getTime())
-                  ? String(discussionCreated)
-                  : new Intl.DateTimeFormat('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(parsedDiscussionDate);
-              }
-            %>
-              <article class="discussion" id="discussion-<%= discussion.id || index %>">
-                <header class="discussion__header">
-                  <span class="discussion__avatar" aria-hidden="true"><%= Array.from(String(nickname))[0] || '用' %></span>
-                  <div>
-                    <strong><%= nickname %><% if (accountUsername && accountUsername !== nickname) { %> <span class="discussion__handle">@<%= accountUsername %></span><% } %></strong>
-                    <% if (discussionDate) { %><time datetime="<%= discussionCreated %>"><%= discussionDate %></time><% } %>
-                  </div>
-                  <span class="discussion__number">#<%= String(index + 1).padStart(2, '0') %></span>
-                </header>
-                <div class="markdown-body discussion__body"><%- renderedBody %></div>
-              </article>
-            <% }); %>
-          <% } %>
+      <details class="compact-about">
+        <summary><span><strong>关于作品</strong><small><%= description ? plainPreview(description) : '创作者没有留下更多说明' %></small></span><span>展开详情</span></summary>
+        <div class="compact-about__content"><div><p><%= description || '创作者没有留下更多说明。' %></p><dl><div><dt>格式</dt><dd><%= formatLabel %></dd></div><% if (video.width) { %><div><dt>尺寸</dt><dd><%= video.width %>×<%= video.height %></dd></div><% } %><div><dt>许可</dt><dd><%= license.code %></dd></div></dl></div><aside><strong><% if (license.cc0) { %>公共领域工具 · <% } %><%= license.name %></strong><p><%= license.summary %></p><a href="<%= license.url %>" target="_blank" rel="license noopener">查看官方许可文本 ↗</a></aside></div>
+      </details>
+
+      <% if (ready) { %>
+      <section class="thread-section" aria-labelledby="discussion-title">
+        <header class="thread-section__header"><div><p class="eyebrow"><span></span> 围绕作品</p><h2 id="discussion-title">讨论</h2></div><p><strong><%= discussionCount %></strong> 条讨论与回复</p></header>
+
+        <details class="topic-composer"<% if (errorMessage || discussionCount === 0) { %> open<% } %>>
+          <summary><span><strong><%= user ? '发起一个讨论' : '登录后参与讨论' %></strong><small><%= user ? '添加标题，让其他人先了解你想谈什么' : '观看始终开放，发言需要稳定账号' %></small></span><span aria-hidden="true">＋</span></summary>
+          <% if (errorMessage) { %><div class="alert alert--error alert--compact" role="alert"><p><%= errorMessage %></p></div><% } %>
+          <% if (user) { %>
+            <form action="/videos/<%= videoId %>/discussions" method="post" data-discussion-form><input type="hidden" name="_csrf" value="<%= safeCsrfToken %>"><label class="field"><span class="field__label">讨论标题 <i>必填</i></span><input type="text" name="title" maxlength="120" required placeholder="用一句话说明讨论主题"></label><div class="editor editor--compact" data-markdown-editor data-preview-endpoint="/api/markdown-preview"><section class="editor__pane"><div class="editor__bar"><strong>正文</strong><span>Markdown / LaTeX</span></div><%- include('partials/math-editor') %><textarea name="body" rows="7" maxlength="5000" required placeholder="展开你的问题、观点或补充资料……" data-markdown-input></textarea></section><section class="editor__pane editor__preview-pane"><div class="editor__bar"><strong>预览</strong><span data-preview-status>等待输入</span></div><div class="markdown-body editor__preview" data-markdown-preview><p class="editor__placeholder">格式化内容会显示在这里。</p></div></section></div><div class="composer-submit"><p>发布后默认折叠显示，读者可先看标题再决定是否展开。</p><button class="button button--primary" type="submit" data-discussion-submit>发布讨论</button></div><p class="composer-status" data-discussion-status aria-live="polite"></p></form>
+          <% } else { %><div class="discussion-auth-gate"><p>账号不要求邮箱或真实姓名，用来保持讨论身份和投票的一致性。</p><a class="button button--primary" href="/login?next=<%= encodeURIComponent('/videos/' + videoId) %>">登录后参与</a></div><% } %>
+        </details>
+
+        <div class="thread-toolbar"><strong><%= safeTree.length %> 个主题</strong><span>默认折叠 · 按发布时间排列</span></div>
+        <div class="thread-list" id="discussion-list">
+          <% if (!safeTree.length) { %><div class="discussion-empty"><h3>还没有讨论</h3><p>可以从一个画面、一段声音，或一个没有解决的问题开始。</p></div><% } %>
+          <% safeTree.forEach(function(node) { %><%- include('partials/discussion-node', { node: node, depth: 0, videoId: videoId, user: user, safeCsrfToken: safeCsrfToken, discussionDate: discussionDate, plainPreview: plainPreview }) %><% }); %>
         </div>
-
-        <aside class="discussion-composer" aria-labelledby="composer-title">
-          <div class="discussion-composer__intro">
-            <span aria-hidden="true">✦</span>
-            <div>
-              <h3 id="composer-title"><% if (videoCurrentUser) { %>以 <%= currentDisplayName %> 的身份回应<% } else { %>登录后写下回应<% } %></h3>
-              <p><% if (videoCurrentUser) { %>讨论会关联到你的稳定账号<% if (currentUsername && currentUsername !== currentDisplayName) { %> @<%= currentUsername %><% } %>，请围绕作品真诚交流。<% } else { %>观看始终开放；发布讨论需要一个账号。<% } %></p>
-            </div>
-          </div>
-
-          <% if (discussionErrorMessage) { %>
-            <div class="alert alert--error alert--compact" role="alert"><span class="alert__icon" aria-hidden="true">!</span><p><%= discussionErrorMessage %></p></div>
-          <% } %>
-
-          <% if (videoCurrentUser) { %>
-          <form action="/videos/<%= videoId %>/discussions" method="post" data-discussion-form>
-            <input type="hidden" name="_csrf" value="<%= safeCsrfToken %>">
-            <div class="editor" data-markdown-editor data-preview-endpoint="/api/markdown-preview">
-              <section class="editor__pane" aria-labelledby="editor-input-title">
-                <div class="editor__bar">
-                  <strong id="editor-input-title">Markdown</strong>
-                  <span>支持 **粗体**、链接、列表和 $LaTeX$</span>
-                </div>
-                <%- include('partials/math-editor') %>
-                <label class="visually-hidden" for="discussion-body">讨论正文</label>
-                <textarea id="discussion-body" name="body" rows="9" maxlength="5000" required placeholder="写下你看到、想到或仍感困惑的……&#10;&#10;行内公式示例：$E=mc^2$" data-markdown-input></textarea>
-              </section>
-              <section class="editor__pane editor__preview-pane" aria-labelledby="editor-preview-title">
-                <div class="editor__bar">
-                  <strong id="editor-preview-title">实时预览</strong>
-                  <span data-preview-status aria-live="polite">等待输入</span>
-                </div>
-                <div class="markdown-body editor__preview" data-markdown-preview>
-                  <p class="editor__placeholder">你的格式化内容会显示在这里。</p>
-                </div>
-              </section>
-            </div>
-            <div class="composer-submit">
-              <p><span aria-hidden="true">⏱</span> 每个账号与网络地址 <%= typeof discussionCooldownSeconds === 'number' ? discussionCooldownSeconds : 30 %> 秒内可发布一次</p>
-              <button class="button button--primary" type="submit" data-discussion-submit>发布讨论 <span aria-hidden="true">→</span></button>
-            </div>
-            <p class="composer-status" data-discussion-status aria-live="polite"></p>
-          </form>
-          <% } else { %>
-            <div class="discussion-auth-gate">
-              <p>注册账号可以让别人识别你在不同讨论中的连续思考，不需要提供真实姓名。</p>
-              <div class="discussion-auth-gate__actions">
-                <a class="button button--primary" href="/login?next=<%= encodeURIComponent('/videos/' + videoId) %>">登录后参与</a>
-                <a class="text-link" href="/register?next=<%= encodeURIComponent('/videos/' + videoId) %>">创建账号 <span aria-hidden="true">→</span></a>
-              </div>
-            </div>
-          <% } %>
-        </aside>
-      </div>
-    </section>
-    <% } %>
-  </main>
-
+      </section>
+      <% } %>
+    </main>
+  </div>
   <%- include('partials/footer') %>
 </body>
 </html>

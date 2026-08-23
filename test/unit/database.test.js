@@ -39,6 +39,18 @@ function video(id, createdAt) {
     userId: null,
     accountUsername: null,
     accountDisplayName: null,
+    categoryId: null,
+    categorySlug: null,
+    categoryName: null,
+    coverStorageName: null,
+    coverMediaType: null,
+    coverSource: null,
+    visibility: 'public',
+    moderationStatus: 'visible',
+    tags: [],
+    upvoteCount: 0,
+    downvoteCount: 0,
+    viewerVote: 0,
     createdAt
   };
 }
@@ -203,7 +215,7 @@ test('账号查找大小写不敏感，内容关联账号且会话可过期、�
   }
 });
 
-test('schema v0 无账号数据库迁移到 v2，并保留视频、讨论和外键行为', async () => {
+test('schema v0 无账号数据库迁移到最新版，并保留视频、讨论和外键行为', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'tongjian-migration-test-'));
   const databasePath = path.join(directory, 'legacy.sqlite');
   let database;
@@ -242,7 +254,7 @@ test('schema v0 无账号数据库迁移到 v2，并保留视频、讨论和外�
 
     database = openDatabase(databasePath);
     assert.equal(database.getSchemaVersion(), CURRENT_SCHEMA_VERSION);
-    assert.equal(CURRENT_SCHEMA_VERSION, 2);
+    assert.equal(CURRENT_SCHEMA_VERSION, 3);
     assert.equal(database.raw.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
     assert.deepEqual(database.raw.prepare('PRAGMA foreign_key_check').all(), []);
     const migratedVideo = database.getVideo('legacy-video');
@@ -270,7 +282,7 @@ test('schema v0 无账号数据库迁移到 v2，并保留视频、讨论和外�
   }
 });
 
-test('schema v1 带账号数据迁移到 v2，完整保留账号、会话、视频和讨论关联', async () => {
+test('schema v1 带账号数据迁移到最新版，完整保留账号、会话、视频和讨论关联', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'tongjian-v1-migration-test-'));
   const databasePath = path.join(directory, 'v1.sqlite');
   let database;
@@ -335,7 +347,7 @@ test('schema v1 带账号数据迁移到 v2，完整保留账号、会话、视�
     v1.close();
 
     database = openDatabase(databasePath);
-    assert.equal(database.getSchemaVersion(), 2);
+    assert.equal(database.getSchemaVersion(), 3);
     assert.equal(database.raw.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
     assert.deepEqual(database.raw.prepare('PRAGMA foreign_key_check').all(), []);
 
@@ -510,6 +522,49 @@ test('验证状态机按时间领取 pending，并正确完成、警告、拒绝
         'finish-warning.webm'
       ]
     );
+    assert.deepEqual(database.raw.prepare('PRAGMA foreign_key_check').all(), []);
+  } finally {
+    database?.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('分类、标签、树状讨论、搜索与双向投票保持可查询和唯一', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'tongjian-catalog-db-test-'));
+  let database;
+  try {
+    database = openDatabase(path.join(directory, 'catalog.sqlite'));
+    const user = database.createUser({
+      id: 'catalog-user', username: 'catalog_user', displayName: '目录用户',
+      passwordHash: 'scrypt-test-value', createdAt: '2026-08-23T01:00:00.000Z'
+    });
+    database.insertVideo({
+      ...video('catalog-video', '2026-08-23T02:00:00.000Z'),
+      userId: user.id,
+      categorySlug: 'science-technology',
+      tags: [{ slug: 'open-source', name: '开源' }, { slug: 'long-video', name: '长视频' }]
+    });
+    const stored = database.getVideo('catalog-video');
+    assert.equal(stored.categoryName, '科学与技术');
+    assert.deepEqual(stored.tags.map((tag) => tag.name), ['开源', '长视频']);
+    assert.deepEqual(database.listVideos({ query: '开源' }).map((entry) => entry.id), ['catalog-video']);
+    assert.deepEqual(database.listVideos({ categorySlug: 'knowledge' }).map((entry) => entry.id), ['catalog-video']);
+    assert.deepEqual(database.listVideos({ tagSlug: 'long-video' }).map((entry) => entry.id), ['catalog-video']);
+
+    const topic = database.insertDiscussion({
+      videoId: stored.id, userId: user.id, nickname: user.displayName,
+      title: '这是一个主题', bodyMarkdown: '主题正文', createdAt: '2026-08-23T03:00:00.000Z'
+    });
+    const reply = database.insertDiscussion({
+      videoId: stored.id, userId: user.id, nickname: user.displayName,
+      parentId: topic.id, bodyMarkdown: '回复正文', createdAt: '2026-08-23T03:01:00.000Z'
+    });
+    assert.equal(database.getDiscussion(reply.id).parentId, topic.id);
+
+    assert.equal(database.setVideoVote(stored.id, user.id, 1, '2026-08-23T04:00:00.000Z').upvoteCount, 1);
+    assert.equal(database.setVideoVote(stored.id, user.id, -1, '2026-08-23T04:01:00.000Z').downvoteCount, 1);
+    assert.equal(database.setVideoVote(stored.id, user.id, 0, '2026-08-23T04:02:00.000Z').downvoteCount, 0);
+    assert.equal(database.setDiscussionVote(topic.id, user.id, 1, '2026-08-23T04:03:00.000Z').viewerVote, 1);
     assert.deepEqual(database.raw.prepare('PRAGMA foreign_key_check').all(), []);
   } finally {
     database?.close();

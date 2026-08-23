@@ -239,6 +239,8 @@ async function upload(instance, {
   attribution = true,
   nonCommercial = false,
   noDerivatives = false,
+  category = 'science-technology',
+  tags = '开放视频, 自动化验收',
   bytes,
   filename = 'river.mp4',
   mimeType = 'video/mp4',
@@ -250,6 +252,8 @@ async function upload(instance, {
   form.set('title', title);
   form.set('creator', creator);
   form.set('description', description);
+  form.set('category', category);
+  form.set('tags', tags);
   if (attribution) form.set('attribution', 'on');
   if (nonCommercial) form.set('nonCommercial', 'on');
   if (noDerivatives) form.set('noDerivatives', 'on');
@@ -332,6 +336,11 @@ test('真实 HTTP：上传 CC BY-NC-ND 视频并支持完整、Range 与 HEAD �
   assert.match(detailHtml, /CC BY-NC-ND 4\.0/);
   assert.match(detailHtml, /creativecommons\.org\/licenses\/by-nc-nd\/4\.0\/deed\.zh-hans/);
   assert.match(detailHtml, /rel="license noopener"/);
+
+  const cover = await fetch(`${instance.baseUrl}${location}/cover`);
+  assert.equal(cover.status, 200);
+  assert.match(cover.headers.get('content-type') || '', /^image\/jpeg/);
+  assert.ok((await cover.arrayBuffer()).byteLength > 100);
 
   const preview = await fetch(`${instance.baseUrl}/api/markdown-preview`, {
     method: 'POST',
@@ -548,7 +557,7 @@ test('真实 HTTP：讨论首次发布成功，立即重复返回 429、Retry-Af
     redirect: 'manual'
   });
   assert.equal(first.status, 303);
-  assert.equal(first.headers.get('location'), `${location}#discussion-list`);
+  assert.match(first.headers.get('location') || '', new RegExp(`^${location}#discussion-\\d+$`));
 
   const repeated = await fetch(`${instance.baseUrl}${location}/discussions`, {
     method: 'POST',
@@ -568,6 +577,62 @@ test('真实 HTTP：讨论首次发布成功，立即重复返回 429、Retry-Af
   assert.match(html, /<strong>第一条讨论<\/strong>/);
   assert.match(html, /class="katex"/);
   assert.doesNotMatch(html, /(?:127\.0\.0\.1|::1)/);
+});
+
+test('真实 HTTP：视频与讨论投票可切换，讨论标题和树状回复可持久化', async (t) => {
+  const instance = await startApplication({ cooldownSeconds: '1' });
+  t.after(() => stopApplication(instance));
+
+  const uploaded = await upload(instance, { title: '树状讨论与投票' });
+  const location = uploaded.headers.get('location');
+  assert.equal((await waitForValidation(instance, location)).ready, true);
+
+  const topicResponse = await fetch(`${instance.baseUrl}${location}/discussions`, {
+    method: 'POST',
+    headers: { cookie: instance.auth.cookieHeader(), 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      _csrf: instance.auth.csrfToken,
+      title: '关于第一幕的讨论',
+      body: '这是主题正文。'
+    }),
+    redirect: 'manual'
+  });
+  assert.equal(topicResponse.status, 303);
+  const topicId = Number(/#discussion-(\d+)$/.exec(topicResponse.headers.get('location') || '')?.[1]);
+  assert.ok(Number.isSafeInteger(topicId));
+
+  await delay(1100);
+  const replyResponse = await fetch(`${instance.baseUrl}${location}/discussions`, {
+    method: 'POST',
+    headers: { cookie: instance.auth.cookieHeader(), 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      _csrf: instance.auth.csrfToken,
+      parentId: String(topicId),
+      body: '这是对主题的回复。'
+    }),
+    redirect: 'manual'
+  });
+  assert.equal(replyResponse.status, 303);
+
+  const videoVote = await fetch(`${instance.baseUrl}${location}/vote`, {
+    method: 'POST',
+    headers: { accept: 'application/json', cookie: instance.auth.cookieHeader(), 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ _csrf: instance.auth.csrfToken, value: '1' })
+  });
+  assert.deepEqual(await videoVote.json(), { upvotes: 1, downvotes: 0, viewerVote: 1 });
+
+  const discussionVote = await fetch(`${instance.baseUrl}/discussions/${topicId}/vote`, {
+    method: 'POST',
+    headers: { accept: 'application/json', cookie: instance.auth.cookieHeader(), 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ _csrf: instance.auth.csrfToken, value: '-1' })
+  });
+  assert.deepEqual(await discussionVote.json(), { upvotes: 0, downvotes: 1, viewerVote: -1 });
+
+  const detail = await fetch(`${instance.baseUrl}${location}`);
+  const html = await detail.text();
+  assert.match(html, /关于第一幕的讨论/);
+  assert.match(html, /这是对主题的回复/);
+  assert.match(html, /discussion-reply/);
 });
 
 test('真实 HTTP：账号会话保护上传与讨论，校验 CSRF，并支持退出后重新登录', async (t) => {

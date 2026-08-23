@@ -295,8 +295,86 @@
     timer = window.setTimeout(poll, 750);
   }
 
+  function setupSidebar() {
+    const toggle = document.querySelector('[data-sidebar-toggle]');
+    const scrim = document.querySelector('[data-sidebar-scrim]');
+    if (!toggle) return;
+    const setOpen = (open) => {
+      document.body.classList.toggle('sidebar-open', open);
+      toggle.setAttribute('aria-expanded', String(open));
+      if (scrim) scrim.hidden = !open;
+    };
+    toggle.addEventListener('click', () => setOpen(!document.body.classList.contains('sidebar-open')));
+    scrim?.addEventListener('click', () => setOpen(false));
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') setOpen(false);
+    });
+  }
+
+  function setupVoteForm(form) {
+    form.addEventListener('submit', async (event) => {
+      if (!window.fetch) return;
+      event.preventDefault();
+      const button = form.querySelector('button');
+      if (!button) return;
+      button.disabled = true;
+      try {
+        const response = await fetch(form.action, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
+          },
+          body: new URLSearchParams(new FormData(form)).toString()
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || '投票失败');
+        const group = form.closest('.reaction-group, .discussion-actions') || form.parentElement;
+        group?.querySelectorAll('[data-upvotes]').forEach((node) => { node.textContent = String(result.upvotes); });
+        group?.querySelectorAll('[data-downvotes]').forEach((node) => { node.textContent = String(result.downvotes); });
+        group?.querySelectorAll('button[name="value"]').forEach((voteButton) => {
+          const requested = Number(voteButton.value);
+          const isUp = requested === 1 || (requested === 0 && voteButton.textContent.includes('认同'));
+          const active = isUp ? result.viewerVote === 1 : result.viewerVote === -1;
+          voteButton.classList.toggle('is-active', active);
+          voteButton.classList.toggle('is-negative', active && !isUp);
+          voteButton.value = active ? '0' : (isUp ? '1' : '-1');
+        });
+      } catch {
+        form.submit();
+        return;
+      } finally {
+        button.disabled = false;
+      }
+    });
+  }
+
+  function openLinkedDiscussion() {
+    if (!location.hash.startsWith('#discussion-')) return;
+    const target = document.querySelector(location.hash);
+    if (!target) return;
+    let parent = target;
+    while (parent) {
+      if (parent.matches?.('[data-discussion-details]')) parent.open = true;
+      parent = parent.parentElement;
+    }
+  }
+
+  function setupCoverPicker() {
+    document.querySelectorAll('.cover-upload input[type="file"]').forEach((input) => {
+      input.addEventListener('change', () => {
+        const button = input.closest('.cover-upload')?.querySelector('.button');
+        if (button) button.textContent = input.files?.[0]?.name || '选择图片';
+      });
+    });
+  }
+
   document.querySelectorAll('[data-license-picker]').forEach(setupLicensePicker);
   document.querySelectorAll('[data-markdown-editor]').forEach(setupMarkdownEditor);
   document.querySelectorAll('[data-discussion-form]').forEach(setupDiscussionForm);
   document.querySelectorAll('[data-validation-watch]').forEach(setupValidationWatch);
+  document.querySelectorAll('[data-vote-form]').forEach(setupVoteForm);
+  setupSidebar();
+  setupCoverPicker();
+  openLinkedDiscussion();
 })();

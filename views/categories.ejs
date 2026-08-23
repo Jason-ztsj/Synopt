@@ -1,0 +1,18 @@
+<%- include('partials/head', { pageTitle: '分类｜同见', pageDescription: '按主题浏览同见的开放长视频。' }) %>
+<body class="page page--information">
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  <%- include('partials/header', { currentPath: '/categories' }) %>
+  <div class="app-shell shell">
+    <%- include('partials/sidebar', { currentPath: '/categories', categoryTree: categoryTree }) %>
+    <main id="main-content" class="information-main" tabindex="-1">
+      <header class="directory-heading"><p class="eyebrow"><span></span> 浏览目录</p><h1>分类</h1><p>分类由平台维护，保持结构稳定；发布者可以另行添加更具体的标签。</p></header>
+      <div class="category-directory">
+        <% categoryTree.forEach(function(category) { %>
+          <section><header><div><h2><a href="/categories/<%= category.slug %>"><%= category.name %></a></h2><p><%= category.description %></p></div><strong><%= category.videoCount || 0 %></strong></header><div><% (category.children || []).forEach(function(child) { %><a href="/categories/<%= child.slug %>"><span><%= child.name %></span><small><%= child.videoCount || 0 %> 段</small></a><% }); %></div></section>
+        <% }); %>
+      </div>
+    </main>
+  </div>
+  <%- include('partials/footer') %>
+</body>
+</html>

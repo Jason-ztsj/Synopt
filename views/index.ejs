@@ -1,115 +1,87 @@
+<%
+  const safeFilters = typeof filters !== 'undefined' && filters ? filters : { query: '', categorySlug: '', tagSlug: '' };
+  const activeListingPath = safeFilters.categorySlug
+    ? '/categories/' + safeFilters.categorySlug
+    : safeFilters.tagSlug ? '/tags/' + safeFilters.tagSlug : '/';
+  const safeListingTitle = typeof listingTitle === 'string' ? listingTitle : '最近发布';
+%>
 <%- include('partials/head', {
-  pageTitle: '同见｜开放的非营利视频共同体',
-  pageDescription: '发现并分享采用开放许可的视频作品，在清晰授权下观看、使用和讨论。'
+  pageTitle: safeListingTitle + '｜同见',
+  pageDescription: '发现采用开放许可的横屏长视频，在清晰授权下观看、使用和讨论。'
 }) %>
-<body class="page page--home">
+<body class="page page--catalog">
   <a class="skip-link" href="#main-content">跳到主要内容</a>
-  <%- include('partials/header', { currentPath: '/' }) %>
+  <%- include('partials/header', { currentPath: activeListingPath, filters: safeFilters }) %>
 
-  <main id="main-content" tabindex="-1">
-    <section class="hero shell" aria-labelledby="hero-title">
-      <div class="hero__copy">
-        <p class="eyebrow"><span></span> 一个由作品连接的公共空间</p>
-        <h1 id="hero-title">让影像自由流动，<br><em>让创作彼此照亮。</em></h1>
-        <p class="hero__lede">上传你愿意开放分享的视频，选定清晰的知识共享许可；用稳定身份参与讨论，不被推荐算法左右。</p>
-        <div class="hero__actions">
-          <a class="button button--primary" href="/upload">发布一段影像 <span aria-hidden="true">↗</span></a>
-          <a class="text-link" href="#latest-videos">看看大家的作品 <span aria-hidden="true">↓</span></a>
-        </div>
-      </div>
-      <aside class="hero__manifesto" aria-label="同见原则">
-        <p class="hero__manifesto-label">共同约定 / COMMON GROUND</p>
-        <ol>
-          <li><span>01</span><p><strong>创作者保有选择</strong><small>每段影像都有明确许可</small></p></li>
-          <li><span>02</span><p><strong>观看不被计算</strong><small>没有关注数与推荐流</small></p></li>
-          <li><span>03</span><p><strong>讨论回到内容</strong><small>持续、克制且平等</small></p></li>
-        </ol>
-      </aside>
-    </section>
-
-    <section class="video-feed shell" id="latest-videos" aria-labelledby="latest-title">
-      <header class="section-heading">
+  <div class="app-shell shell">
+    <%- include('partials/sidebar', { currentPath: activeListingPath, categoryTree: categoryTree }) %>
+    <main id="main-content" class="catalog-main" tabindex="-1">
+      <header class="catalog-header">
         <div>
-          <p class="eyebrow"><span></span> 最近发布</p>
-          <h2 id="latest-title">共同观看</h2>
+          <p class="eyebrow"><span></span> 开放影像目录</p>
+          <h1><%= safeListingTitle %></h1>
+          <% if (safeFilters.query) { %><p>在标题、作者、作品说明和标签中搜索。</p><% } %>
         </div>
-        <% if (Array.isArray(videos) && videos.length > 0) { %>
-          <p class="section-heading__count"><strong><%= videos.length %></strong> 段公开影像</p>
-        <% } %>
+        <a class="button button--primary catalog-header__publish" href="/upload">发布视频 <span aria-hidden="true">＋</span></a>
       </header>
 
+      <nav class="feed-tabs" aria-label="视频排序">
+        <a href="/"<% if (!safeFilters.query && !safeFilters.categorySlug && !safeFilters.tagSlug) { %> aria-current="page"<% } %>>最新发布</a>
+        <a href="/algorithm">排序如何工作</a>
+      </nav>
+
+      <form class="catalog-filters" action="/search" method="get">
+        <label><span>搜索</span><input type="search" name="q" maxlength="120" value="<%= safeFilters.query %>" placeholder="标题、作者或标签"></label>
+        <label><span>分类</span><select name="category"><option value="">全部分类</option><% categories.filter(function(category) { return category.parentId; }).forEach(function(category) { %><option value="<%= category.slug %>"<% if (safeFilters.categorySlug === category.slug) { %> selected<% } %>><%= category.parentName %> · <%= category.name %></option><% }); %></select></label>
+        <button class="button button--quiet" type="submit">筛选</button>
+        <% if (safeFilters.query || safeFilters.categorySlug || safeFilters.tagSlug) { %><a class="catalog-filters__clear" href="/">清除条件</a><% } %>
+      </form>
+
       <% if (!Array.isArray(videos) || videos.length === 0) { %>
-        <div class="empty-state">
+        <div class="empty-state empty-state--catalog">
           <div class="empty-state__signal" aria-hidden="true"><span></span></div>
-          <p class="eyebrow"><span></span> 放映室已就绪</p>
-          <h3>第一束光，等你点亮。</h3>
-          <p>这里还没有视频。发布第一段采用开放许可的影像，让它成为共同记忆的开始。</p>
-          <a class="button button--primary" href="/upload">发布第一个视频</a>
+          <p class="eyebrow"><span></span><%= safeFilters.query || safeFilters.categorySlug || safeFilters.tagSlug ? '没有匹配的作品' : '放映室已就绪' %></p>
+          <h2><%= safeFilters.query || safeFilters.categorySlug || safeFilters.tagSlug ? '换一个条件再看看。' : '第一束光，等你点亮。' %></h2>
+          <p><%= safeFilters.query || safeFilters.categorySlug || safeFilters.tagSlug ? '可以尝试更短的关键词，或返回全部视频。' : '这里还没有视频。发布第一段采用开放许可的横屏长视频，让它成为共同记忆的开始。' %></p>
+          <a class="button button--primary" href="<%= safeFilters.query || safeFilters.categorySlug || safeFilters.tagSlug ? '/' : '/upload' %>"><%= safeFilters.query || safeFilters.categorySlug || safeFilters.tagSlug ? '查看全部视频' : '发布第一个视频' %></a>
         </div>
       <% } else { %>
-        <div class="video-grid">
-          <% videos.forEach(function(video, index) {
-            const videoId = video.id || video.uuid;
-            const licenseCode = video.licenseLabel || video.licenseCode || video.license_code || video.license || '';
-            const licenseLabels = {
-              'CC0-1.0': 'CC0 1.0',
-              'CC-BY-4.0': 'CC BY 4.0',
-              'CC-BY-NC-4.0': 'CC BY-NC 4.0',
-              'CC-BY-ND-4.0': 'CC BY-ND 4.0',
-              'CC-BY-NC-ND-4.0': 'CC BY-NC-ND 4.0'
-            };
-            const licenseLabel = licenseLabels[licenseCode] || licenseCode || '开放许可';
-            const createdValue = video.createdAt || video.created_at;
-            let formattedDate = '';
-            if (createdValue) {
-              const parsedDate = new Date(createdValue);
-              formattedDate = Number.isNaN(parsedDate.getTime())
-                ? String(createdValue)
-                : new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'short', day: 'numeric' }).format(parsedDate);
-            }
-            const description = typeof video.description === 'string' ? video.description.trim() : '';
-            const accountDisplayName = video.accountDisplayName || video.account_display_name || video.uploaderDisplayName || video.uploader_display_name || '';
-            const accountUsername = video.accountUsername || video.account_username || video.uploaderUsername || video.uploader_username || '';
-            const accountLabel = accountDisplayName || accountUsername;
-            const codecLabels = { avc: 'H.264', hevc: 'HEVC', vp9: 'VP9', av1: 'AV1', unknown: 'LEGACY' };
-            const formatLabel = `${codecLabels[video.videoCodec || video.video_codec] || 'VIDEO'} / ${(video.container || 'mp4').toUpperCase()}`;
+        <div class="catalog-summary"><strong><%= videos.length %></strong> 段公开影像</div>
+        <div class="catalog-grid">
+          <% videos.forEach(function(video) {
+            const created = video.createdAt ? new Date(video.createdAt) : null;
+            const date = created && !Number.isNaN(created.getTime())
+              ? new Intl.DateTimeFormat('zh-CN', { month: 'short', day: 'numeric' }).format(created)
+              : '';
+            const duration = Number(video.durationSeconds);
+            const durationText = Number.isFinite(duration)
+              ? (duration >= 3600
+                ? Math.floor(duration / 3600) + ':' + String(Math.floor((duration % 3600) / 60)).padStart(2, '0') + ':' + String(Math.floor(duration % 60)).padStart(2, '0')
+                : Math.floor(duration / 60) + ':' + String(Math.floor(duration % 60)).padStart(2, '0'))
+              : '';
           %>
-            <article class="video-card">
-              <a class="video-card__visual" href="/videos/<%= videoId %>" aria-label="播放《<%= video.title %>》">
-                <span class="video-card__number" aria-hidden="true"><%= String(index + 1).padStart(2, '0') %></span>
-                <span class="video-card__rings" aria-hidden="true"><i></i><i></i><i></i></span>
-                <span class="play-button" aria-hidden="true">▶</span>
-                <span class="video-card__format"><%= formatLabel %> / OPEN VIDEO</span>
+            <article class="catalog-card">
+              <a class="catalog-card__cover" href="/videos/<%= video.id %>" aria-label="观看《<%= video.title %>》">
+                <% if (video.coverStorageName) { %><img src="/videos/<%= video.id %>/cover" alt="" loading="lazy"><% } else { %><span class="catalog-card__placeholder" aria-hidden="true"><i></i><i></i><b>同见</b></span><% } %>
+                <span class="catalog-card__play" aria-hidden="true">▶</span>
+                <% if (durationText) { %><span class="catalog-card__duration"><%= durationText %></span><% } %>
               </a>
-              <div class="video-card__body">
-                <div class="video-card__meta">
-                  <span class="license-pill"><%= licenseLabel %></span>
-                  <% if (formattedDate) { %><time datetime="<%= createdValue %>"><%= formattedDate %></time><% } %>
+              <div class="catalog-card__body">
+                <div class="catalog-card__context">
+                  <% if (video.categoryName) { %><a href="/categories/<%= video.categorySlug %>"><%= video.categoryName %></a><% } else { %><span>未分类</span><% } %>
+                  <% if (date) { %><time datetime="<%= video.createdAt %>"><%= date %></time><% } %>
                 </div>
-                <h3><a href="/videos/<%= videoId %>"><%= video.title %></a></h3>
-                <p class="video-card__creator">由 <strong><%= video.creator %></strong> 创作</p>
-                <% if (accountLabel) { %>
-                  <p class="video-card__account">由 <strong><%= accountLabel %></strong><% if (accountUsername && accountUsername !== accountLabel) { %> <span>@<%= accountUsername %></span><% } %> 发布</p>
-                <% } %>
-                <% if (description) { %><p class="video-card__description"><%= description %></p><% } %>
-                <a class="video-card__watch" href="/videos/<%= videoId %>">观看与讨论 <span aria-hidden="true">→</span></a>
+                <h2><a href="/videos/<%= video.id %>"><%= video.title %></a></h2>
+                <p class="catalog-card__creator"><%= video.creator %><% if (video.accountDisplayName) { %> · 由 <%= video.accountDisplayName %> 发布<% } %></p>
+                <% if (video.tags.length) { %><div class="tag-row"><% video.tags.slice(0, 4).forEach(function(tag) { %><a href="/tags/<%= tag.slug %>">#<%= tag.name %></a><% }); %></div><% } %>
+                <div class="catalog-card__signals"><span>认同 <strong><%= video.upvoteCount %></strong></span><span>反对 <strong><%= video.downvoteCount %></strong></span><span><%= video.licenseLabel %></span></div>
               </div>
             </article>
           <% }); %>
         </div>
       <% } %>
-    </section>
-
-    <section class="principles shell" aria-labelledby="principles-title">
-      <p class="eyebrow"><span></span> 为什么是同见</p>
-      <h2 id="principles-title">分享，不必交换隐私。</h2>
-      <div class="principles__grid">
-        <article><span aria-hidden="true">◎</span><h3>稳定身份</h3><p>观看始终开放；注册后使用持续账号发布与回应，不要求真实姓名。</p></article>
-        <article><span aria-hidden="true">◇</span><h3>许可先行</h3><p>五种开放许可一目了然，让创作者与使用者都知道边界。</p></article>
-        <article><span aria-hidden="true">∿</span><h3>原码流通</h3><p>浏览器只在需要时无损重封装，服务器验证完整性，但不会重新编码你的画面与声音。</p></article>
-      </div>
-    </section>
-  </main>
+    </main>
+  </div>
 
   <%- include('partials/footer') %>
 </body>

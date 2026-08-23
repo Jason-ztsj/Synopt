@@ -62,8 +62,9 @@
 <body class="page page--upload">
   <a class="skip-link" href="#main-content">跳到主要内容</a>
   <%- include('partials/header', { currentPath: '/upload' }) %>
-
-  <main id="main-content" class="shell upload-layout" tabindex="-1">
+  <div class="app-shell shell">
+  <%- include('partials/sidebar', { currentPath: '/upload', categoryTree: categoryTree }) %>
+  <main id="main-content" class="upload-layout" tabindex="-1">
     <header class="page-intro">
       <a class="back-link" href="/"><span aria-hidden="true">←</span> 返回放映室</a>
       <p class="eyebrow"><span></span> 发布开放影像</p>
@@ -102,6 +103,22 @@
             <span class="field__label">视频标题 <i>必填</i></span>
             <input type="text" name="title" value="<%= safeForm.title || '' %>" maxlength="120" autocomplete="off" placeholder="例如：河流经过我们的村庄" required>
             <span class="field__hint">最多 120 个字符</span>
+          </label>
+          <label class="field">
+            <span class="field__label">主分类 <i>必填</i></span>
+            <select name="category" required>
+              <option value="">请选择一个分类</option>
+              <% categories.filter(function(category) { return category.parentId; }).forEach(function(category) { %>
+                <option value="<%= category.slug %>"<% if (safeForm.category === category.slug) { %> selected<% } %>><%= category.parentName %> · <%= category.name %></option>
+              <% }); %>
+              <option value="other"<% if (safeForm.category === 'other') { %> selected<% } %>>其他</option>
+            </select>
+            <span class="field__hint">分类由平台维护，便于长期整理和后台管理</span>
+          </label>
+          <label class="field">
+            <span class="field__label">标签 <small>选填</small></span>
+            <input type="text" name="tags" value="<%= safeForm.tags || '' %>" maxlength="280" placeholder="例如：开源, 数学, 纪录片">
+            <span class="field__hint">使用逗号分隔，最多 8 个标签，每个不超过 32 个字符</span>
           </label>
           <label class="field">
             <span class="field__label">创作者署名 <i>必填</i></span>
@@ -180,6 +197,12 @@
           <span aria-hidden="true">i</span>
           <p><strong>首期兼容范围</strong>H.264 + AAC 会规范为 MP4；VP9/AV1 + Opus 会规范为 WebM。HEVC + AAC 可实验性发布，但目前只在原生支持 HEVC 的设备上播放。其他编码会给出转换提示。</p>
         </div>
+        <label class="cover-upload">
+          <span class="cover-upload__copy"><strong>自定义封面 <small>选填</small></strong><span>严格 16:9，1280×720 至 3840×2160，JPEG / PNG / WebP，不超过 5 MiB。</span></span>
+          <input type="file" name="cover" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp">
+          <span class="button button--quiet">选择图片</span>
+        </label>
+        <p class="cover-fallback-note">不上传封面时，视频通过验证后会自动抽取第一帧，并生成 1280×720 的横屏封面。</p>
       </section>
 
       <div class="form-submit">
@@ -189,6 +212,7 @@
       </div>
     </form>
   </main>
+  </div>
 
   <%- include('partials/footer') %>
 </body>

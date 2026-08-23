@@ -18,6 +18,7 @@ import {
   verifyPassword
 } from './auth.js';
 import { loadConfig } from './config.js';
+import { validateCoverImage } from './cover-image.js';
 import { openDatabase } from './database.js';
 import { AppError, ValidationError } from './errors.js';
 import { getClientIp } from './ip.js';
@@ -31,6 +32,10 @@ import {
 import { DiscussionRateLimiter } from './rate-limit.js';
 import {
   validateDiscussionBody,
+  validateDiscussionTitle,
+  validateCategorySlug,
+  validateTags,
+  validateVoteValue,
   validateLoginFields,
   validateRegistrationFields,
   validateVideoFields
@@ -144,6 +149,13 @@ function pendingVideoPath(config, storageName) {
   return path.join(config.pendingStoragePath, storageName);
 }
 
+function coverPath(config, storageName) {
+  if (typeof storageName !== 'string' || path.basename(storageName) !== storageName) {
+    throw new AppError('封面存储记录无效', 500, 'INVALID_COVER_RECORD');
+  }
+  return path.join(config.coverStoragePath, storageName);
+}
+
 function publicValidationStatus(status) {
   return ({
     pending: { label: '等待验证', terminal: false },
@@ -162,6 +174,36 @@ function discussionView(discussion) {
   };
 }
 
+function buildDiscussionTree(discussions) {
+  const nodes = new Map(discussions.map((discussion) => [discussion.id, { ...discussion, replies: [] }]));
+  const roots = [];
+  for (const node of nodes.values()) {
+    const parent = node.parentId ? nodes.get(node.parentId) : null;
+    if (parent) parent.replies.push(node);
+    else roots.push(node);
+  }
+  return roots;
+}
+
+function categoryTree(categories) {
+  const byId = new Map(categories.map((category) => [category.id, { ...category, children: [] }]));
+  const roots = [];
+  for (const category of byId.values()) {
+    const parent = category.parentId ? byId.get(category.parentId) : null;
+    if (parent) parent.children.push(category);
+    else roots.push(category);
+  }
+  return roots;
+}
+
+function discussionTitleFromBody(body) {
+  return body
+    .replace(/[`*_>#\[\]$]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 60) || '未命名讨论';
+}
+
 export function createApp(options = {}) {
   const config = options.config ?? loadConfig(options.env, options.cwd);
   const now = options.now ?? (() => Date.now());
@@ -169,6 +211,7 @@ export function createApp(options = {}) {
   fs.mkdirSync(config.videoStoragePath, { recursive: true });
   fs.mkdirSync(config.temporaryStoragePath, { recursive: true });
   fs.mkdirSync(config.pendingStoragePath, { recursive: true });
+  fs.mkdirSync(config.coverStoragePath, { recursive: true });
   const database = options.database ?? openDatabase(config.databasePath);
   const ownsDatabase = options.database === undefined;
   const rateLimiter = options.rateLimiter ?? new DiscussionRateLimiter({
@@ -190,16 +233,17 @@ export function createApp(options = {}) {
   app.set('view engine', 'ejs');
   app.set('views', path.join(projectRoot, 'views'));
 
-  app.use((_request, response, next) => {
-    response.set({
+  app.use((request, response, next) => {
+    const securityHeaders = {
       'Content-Security-Policy': "default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; media-src 'self'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; worker-src 'self'",
-      'Cross-Origin-Opener-Policy': 'same-origin',
       'Cross-Origin-Resource-Policy': 'same-origin',
       'Permissions-Policy': 'camera=(), geolocation=(), microphone=()',
       'Referrer-Policy': 'strict-origin-when-cross-origin',
       'X-Content-Type-Options': 'nosniff',
       'X-Frame-Options': 'DENY'
-    });
+    };
+    if (request.secure) securityHeaders['Cross-Origin-Opener-Policy'] = 'same-origin';
+    response.set(securityHeaders);
     next();
   });
 
@@ -327,7 +371,7 @@ export function createApp(options = {}) {
     }),
     limits: {
       fileSize: config.maxUploadBytes,
-      files: 1,
+      files: 2,
       fields: 16,
       fieldNameSize: 64,
       fieldSize: 32 * 1024
@@ -482,26 +526,66 @@ export function createApp(options = {}) {
     }
   });
 
-  app.get('/', (_request, response, next) => {
+  const catalogLocals = () => {
+    const categories = database.listCategories();
+    return { categories, categoryTree: categoryTree(categories), popularTags: database.listTags().slice(0, 16) };
+  };
+
+  const renderVideoListing = (request, response, next, overrides = {}) => {
     try {
-      const videos = database.listVideos().map((video) => ({
+      const query = String(overrides.query ?? request.query.q ?? '').trim().slice(0, 120);
+      const categorySlug = String(overrides.categorySlug ?? request.query.category ?? '').trim().slice(0, 48);
+      const tagSlug = String(overrides.tagSlug ?? request.query.tag ?? '').trim().slice(0, 48);
+      const videos = database.listVideos({ query, categorySlug, tagSlug }).map((video) => ({
         ...video,
         licenseLabel: getLicense(video.licenseCode)?.code ?? video.licenseCode
       }));
-      response.render('index', { videos });
+      response.render('index', {
+        videos,
+        filters: { query, categorySlug, tagSlug },
+        listingTitle: overrides.listingTitle ?? (query ? `“${query}”的搜索结果` : '最近发布'),
+        ...catalogLocals()
+      });
     } catch (error) {
       next(error);
     }
+  };
+
+  app.get('/', (request, response, next) => renderVideoListing(request, response, next));
+  app.get('/search', (request, response, next) => renderVideoListing(request, response, next));
+  app.get('/categories/:slug', (request, response, next) => {
+    const category = database.getCategoryBySlug(request.params.slug);
+    if (!category) {
+      next(new AppError('找不到这个分类', 404, 'CATEGORY_NOT_FOUND'));
+      return;
+    }
+    renderVideoListing(request, response, next, { categorySlug: category.slug, listingTitle: category.name });
   });
+  app.get('/tags/:slug', (request, response, next) => {
+    const tag = database.getTagBySlug(request.params.slug);
+    if (!tag) {
+      next(new AppError('找不到这个标签', 404, 'TAG_NOT_FOUND'));
+      return;
+    }
+    renderVideoListing(request, response, next, { tagSlug: tag.slug, listingTitle: `#${tag.name}` });
+  });
+  app.get('/categories', (_request, response) => response.render('categories', catalogLocals()));
+  app.get('/tags', (_request, response) => response.render('tags', catalogLocals()));
+  app.get('/about', (_request, response) => response.render('about', catalogLocals()));
+  app.get('/algorithm', (_request, response) => response.render('algorithm', catalogLocals()));
 
   app.get('/upload', requireAuthentication, (_request, response) => {
-    response.render('upload', { form: {}, error: '', maxUploadMb: config.maxUploadMb });
+    response.render('upload', { form: {}, error: '', maxUploadMb: config.maxUploadMb, ...catalogLocals() });
   });
 
   app.post('/videos', requireAuthentication, (request, response, next) => {
-    upload.single('video')(request, response, async (uploadError) => {
-      let temporaryPath = request.file?.path;
+    upload.fields([{ name: 'video', maxCount: 1 }, { name: 'cover', maxCount: 1 }])(request, response, async (uploadError) => {
+      const videoFile = request.files?.video?.[0];
+      const coverFile = request.files?.cover?.[0];
+      let temporaryPath = videoFile?.path;
+      let coverTemporaryPath = coverFile?.path;
       let stagedPath;
+      let storedCoverPath;
       try {
         if (uploadError) {
           const tooLarge = uploadError instanceof multer.MulterError && uploadError.code === 'LIMIT_FILE_SIZE';
@@ -513,9 +597,23 @@ export function createApp(options = {}) {
         }
         assertCsrf(request);
         const fields = validateVideoFields(request.body);
-        if (!request.file) throw new ValidationError('请选择一个视频文件', 'VIDEO_REQUIRED');
-        const canonical = validateCanonicalUploadMetadata(request.file.originalname, request.file.mimetype);
+        const categorySlug = validateCategorySlug(request.body?.category);
+        const selectedCategory = database.getCategoryBySlug(categorySlug);
+        if (!selectedCategory) throw new ValidationError('请选择有效的视频分类', 'INVALID_CATEGORY');
+        const tags = validateTags(request.body?.tags);
+        if (!videoFile) throw new ValidationError('请选择一个视频文件', 'VIDEO_REQUIRED');
+        const canonical = validateCanonicalUploadMetadata(videoFile.originalname, videoFile.mimetype);
         await validateCanonicalUploadHeader(temporaryPath, canonical.container);
+
+        let coverInfo = null;
+        let coverStorageName = null;
+        if (coverFile) {
+          coverInfo = await validateCoverImage(coverFile);
+          coverStorageName = `${crypto.randomUUID()}${coverInfo.extension}`;
+          storedCoverPath = coverPath(config, coverStorageName);
+          await rename(coverTemporaryPath, storedCoverPath);
+          coverTemporaryPath = undefined;
+        }
 
         const license = normalizeLicense(request.body);
         const id = crypto.randomUUID();
@@ -529,11 +627,16 @@ export function createApp(options = {}) {
             id,
             userId: request.currentUser.id,
             ...fields,
+            categoryId: selectedCategory.id,
+            tags,
+            coverStorageName,
+            coverMediaType: coverInfo?.mediaType ?? null,
+            coverSource: coverInfo ? 'uploaded' : null,
             licenseCode: license.id,
             storageName,
-            originalFilename: normalizeSourceFilename(request.body?.sourceFilename, request.file.originalname),
+            originalFilename: normalizeSourceFilename(request.body?.sourceFilename, videoFile.originalname),
             mediaType: canonical.mediaType,
-            byteSize: request.file.size,
+            byteSize: videoFile.size,
             container: canonical.container,
             videoCodec: 'unknown',
             audioCodec: null,
@@ -548,7 +651,9 @@ export function createApp(options = {}) {
           });
         } catch (error) {
           await safeUnlink(stagedPath);
+          await safeUnlink(storedCoverPath);
           stagedPath = undefined;
+          storedCoverPath = undefined;
           throw error;
         }
 
@@ -566,6 +671,8 @@ export function createApp(options = {}) {
       } catch (error) {
         try {
           await safeUnlink(temporaryPath);
+          await safeUnlink(coverTemporaryPath);
+          if (!stagedPath) await safeUnlink(storedCoverPath);
         } catch (cleanupError) {
           error.cleanupError = cleanupError;
           console.error('上传临时文件清理失败：', cleanupError);
@@ -578,7 +685,8 @@ export function createApp(options = {}) {
           response.status(error.status).render('upload', {
             form: request.body ?? {},
             error: error.message,
-            maxUploadMb: config.maxUploadMb
+            maxUploadMb: config.maxUploadMb,
+            ...catalogLocals()
           });
           return;
         }
@@ -589,22 +697,27 @@ export function createApp(options = {}) {
 
   app.get('/videos/:id', (request, response, next) => {
     try {
-      const video = database.getVideo(request.params.id);
+      const video = database.getVideo(request.params.id, request.currentUser?.id);
       if (!video) throw new AppError('找不到这段视频', 404, 'VIDEO_NOT_FOUND');
       const isReady = ['ready', 'ready_with_warnings'].includes(video.validationStatus);
-      if (!isReady && request.currentUser?.id !== video.userId) {
+      const isOwner = request.currentUser?.id === video.userId;
+      if ((!isReady || video.visibility !== 'public' || video.moderationStatus !== 'visible') && !isOwner) {
         throw new AppError('找不到这段视频', 404, 'VIDEO_NOT_FOUND');
       }
       const license = getLicense(video.licenseCode);
       if (!license) throw new AppError('视频许可证记录无效', 500, 'INVALID_LICENSE_RECORD');
-      const discussions = isReady ? database.listDiscussions(video.id).map(discussionView) : [];
+      const discussions = isReady
+        ? database.listDiscussions(video.id, request.currentUser?.id).map(discussionView)
+        : [];
       response.render('video', {
         video,
         license,
         discussions,
+        discussionTree: buildDiscussionTree(discussions),
         validationStatus: publicValidationStatus(video.validationStatus),
         discussionError: '',
-        discussionCooldownSeconds: config.discussionCooldownSeconds
+        discussionCooldownSeconds: config.discussionCooldownSeconds,
+        ...catalogLocals()
       });
     } catch (error) {
       next(error);
@@ -665,6 +778,30 @@ export function createApp(options = {}) {
 
   app.route('/videos/:id/media').get(serveMedia).head(serveMedia);
 
+  app.get('/videos/:id/cover', async (request, response, next) => {
+    try {
+      const video = database.getVideo(request.params.id);
+      if (!video || !video.coverStorageName || !['ready', 'ready_with_warnings'].includes(video.validationStatus)) {
+        throw new AppError('视频封面尚不可用', 404, 'COVER_NOT_FOUND');
+      }
+      if (video.visibility !== 'public' || video.moderationStatus !== 'visible') {
+        throw new AppError('视频封面尚不可用', 404, 'COVER_NOT_FOUND');
+      }
+      const filePath = coverPath(config, video.coverStorageName);
+      const fileStat = await stat(filePath);
+      if (!fileStat.isFile()) throw new AppError('视频封面尚不可用', 404, 'COVER_NOT_FOUND');
+      response.set({
+        'Content-Type': video.coverMediaType,
+        'Content-Length': String(fileStat.size),
+        'Cache-Control': response.hasHeader('Set-Cookie') ? 'private, no-store' : 'public, max-age=86400'
+      });
+      await pipeline(createReadStream(filePath), response);
+    } catch (error) {
+      if (error?.code === 'ENOENT') next(new AppError('视频封面尚不可用', 404, 'COVER_NOT_FOUND'));
+      else next(error);
+    }
+  });
+
   app.get('/api/videos/:id/status', requireAuthentication, (request, response, next) => {
     try {
       const video = database.getVideo(request.params.id);
@@ -707,6 +844,18 @@ export function createApp(options = {}) {
       }
       const bodyMarkdown = validateDiscussionBody(request.body?.body);
       renderMarkdown(bodyMarkdown);
+      const parentId = request.body?.parentId === undefined || request.body?.parentId === ''
+        ? null
+        : Number(request.body.parentId);
+      let parent = null;
+      if (parentId !== null) {
+        if (!Number.isSafeInteger(parentId) || parentId < 1) throw new ValidationError('回复目标无效');
+        parent = database.getDiscussion(parentId);
+        if (!parent || parent.videoId !== video.id) throw new ValidationError('回复目标不存在');
+      }
+      const title = parent
+        ? null
+        : validateDiscussionTitle(request.body?.title || discussionTitleFromBody(bodyMarkdown));
       const clientIp = getClientIp(request, config.clientIpMode);
       const limits = [
         rateLimiter.check(`ip:${clientIp}`),
@@ -720,13 +869,15 @@ export function createApp(options = {}) {
           response.status(429).json({ error: message, retryAfterSeconds });
           return;
         }
-        const discussions = database.listDiscussions(video.id).map(discussionView);
+        const discussions = database.listDiscussions(video.id, request.currentUser.id).map(discussionView);
         response.status(429).render('video', {
           video,
           license: getLicense(video.licenseCode),
           discussions,
+          discussionTree: buildDiscussionTree(discussions),
           discussionError: message,
-          discussionCooldownSeconds: config.discussionCooldownSeconds
+          discussionCooldownSeconds: config.discussionCooldownSeconds,
+          ...catalogLocals()
         });
         return;
       }
@@ -736,6 +887,8 @@ export function createApp(options = {}) {
         userId: request.currentUser.id,
         nickname: request.currentUser.displayName,
         bodyMarkdown,
+        title,
+        parentId,
         createdAt: nowIso()
       });
       rateLimiter.consume(`ip:${clientIp}`);
@@ -749,12 +902,50 @@ export function createApp(options = {}) {
         });
         return;
       }
-      response.redirect(303, `/videos/${video.id}#discussion-list`);
+      response.redirect(303, `/videos/${video.id}#discussion-${discussion.id}`);
     } catch (error) {
       if (error instanceof AppError && wantsJson(request)) {
         response.status(error.status).json({ error: error.message });
         return;
       }
+      next(error);
+    }
+  });
+
+  app.post('/videos/:id/vote', requireAuthentication, (request, response, next) => {
+    try {
+      assertCsrf(request);
+      const video = database.getVideo(request.params.id);
+      if (!video || !['ready', 'ready_with_warnings'].includes(video.validationStatus)) {
+        throw new AppError('找不到这段视频', 404, 'VIDEO_NOT_FOUND');
+      }
+      const value = validateVoteValue(request.body?.value);
+      const updated = database.setVideoVote(video.id, request.currentUser.id, value, nowIso());
+      if (wantsJson(request)) {
+        response.status(200).json({ upvotes: updated.upvoteCount, downvotes: updated.downvoteCount, viewerVote: updated.viewerVote });
+        return;
+      }
+      response.redirect(303, `/videos/${video.id}`);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/discussions/:id/vote', requireAuthentication, (request, response, next) => {
+    try {
+      assertCsrf(request);
+      const id = Number(request.params.id);
+      if (!Number.isSafeInteger(id) || id < 1) throw new AppError('找不到这条讨论', 404, 'DISCUSSION_NOT_FOUND');
+      const discussion = database.getDiscussion(id);
+      if (!discussion) throw new AppError('找不到这条讨论', 404, 'DISCUSSION_NOT_FOUND');
+      const value = validateVoteValue(request.body?.value);
+      const updated = database.setDiscussionVote(id, request.currentUser.id, value, nowIso());
+      if (wantsJson(request)) {
+        response.status(200).json({ upvotes: updated.upvoteCount, downvotes: updated.downvoteCount, viewerVote: updated.viewerVote });
+        return;
+      }
+      response.redirect(303, `/videos/${discussion.videoId}#discussion-${discussion.id}`);
+    } catch (error) {
       next(error);
     }
   });
