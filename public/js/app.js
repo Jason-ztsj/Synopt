@@ -332,13 +332,15 @@
         const group = form.closest('.reaction-group, .discussion-actions') || form.parentElement;
         group?.querySelectorAll('[data-upvotes]').forEach((node) => { node.textContent = String(result.upvotes); });
         group?.querySelectorAll('[data-downvotes]').forEach((node) => { node.textContent = String(result.downvotes); });
-        group?.querySelectorAll('button[name="value"]').forEach((voteButton) => {
-          const requested = Number(voteButton.value);
-          const isUp = requested === 1 || (requested === 0 && voteButton.textContent.includes('认同'));
+        group?.querySelectorAll('[data-vote-form]').forEach((voteForm) => {
+          const voteButton = voteForm.querySelector('button[type="submit"]');
+          const voteInput = voteForm.querySelector('input[name="value"]');
+          if (!voteButton || !voteInput) return;
+          const isUp = voteForm.dataset.voteKind === 'up';
           const active = isUp ? result.viewerVote === 1 : result.viewerVote === -1;
           voteButton.classList.toggle('is-active', active);
           voteButton.classList.toggle('is-negative', active && !isUp);
-          voteButton.value = active ? '0' : (isUp ? '1' : '-1');
+          voteInput.value = active ? '0' : (isUp ? '1' : '-1');
         });
       } catch {
         form.submit();

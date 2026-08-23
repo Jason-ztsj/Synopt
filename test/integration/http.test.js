@@ -665,6 +665,8 @@ test('真实 HTTP：账号会话保护上传与讨论，校验 CSRF，并支持�
   });
   const authenticatedHtml = await authenticatedDetail.text();
   assert.match(authenticatedHtml, /account-chip__avatar[^>]*>🚀<\/span>/);
+  assert.match(authenticatedHtml, /data-vote-kind="up"[^]*?name="value" value="1"/);
+  assert.match(authenticatedHtml, /data-vote-kind="down"[^]*?name="value" value="-1"/);
   assert.match(authenticatedHtml, /data-formula-editor/);
   assert.match(authenticatedHtml, /\/static\/js\/math-editor\.js/);
   const mathLiveModule = await fetch(`${instance.baseUrl}/assets/mathlive/mathlive.min.mjs`);
