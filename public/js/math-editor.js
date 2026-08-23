@@ -2,10 +2,11 @@ import { MathfieldElement } from '/assets/mathlive/mathlive.min.mjs';
 
 const MATHLIVE_ASSET_ROOT = '/assets/mathlive';
 
-// Set these before creating a MathfieldElement so both local development and
-// the Docker image load bundled assets instead of contacting a CDN.
+// Configure MathLive before any field is created. Assets stay local and its
+// own keyboard/menu labels follow the page language.
 MathfieldElement.fontsDirectory = `${MATHLIVE_ASSET_ROOT}/fonts`;
 MathfieldElement.soundsDirectory = `${MATHLIVE_ASSET_ROOT}/sounds`;
+MathfieldElement.locale = 'zh-cn';
 
 function isEscaped(value, index) {
   let slashCount = 0;
@@ -84,24 +85,28 @@ function setupFormulaEditor(root) {
   const status = root.querySelector('[data-formula-status]');
   const commitButton = root.querySelector('[data-formula-commit]');
   const modeButtons = [...root.querySelectorAll('[data-formula-mode]')];
-  const tabs = [...root.querySelectorAll('[data-formula-tab]')];
-  const panels = [...root.querySelectorAll('[data-formula-panel]')];
 
   if (!input || !dialog || !fieldHost || !commitButton) return;
 
-  const mathfield = new MathfieldElement();
-  mathfield.className = 'formula-field';
-  mathfield.setAttribute('aria-label', '可视化公式输入框');
-  mathfield.mathVirtualKeyboardPolicy = 'manual';
-  mathfield.smartFence = true;
-  mathfield.smartSuperscript = true;
-  mathfield.placeholder = '\\text{在此输入公式}';
-  fieldHost.replaceChildren(mathfield);
-
+  let mathfield = null;
   let mode = 'inline';
   let editRange = { start: 0, end: 0 };
   let selectionBeforeOpen = { start: 0, end: 0 };
   let editingExistingFormula = false;
+
+  function ensureMathfield() {
+    if (mathfield) return mathfield;
+    mathfield = new MathfieldElement();
+    mathfield.className = 'formula-field';
+    mathfield.setAttribute('aria-label', '可视化公式输入框');
+    mathfield.mathVirtualKeyboardPolicy = 'manual';
+    mathfield.smartFence = true;
+    mathfield.smartSuperscript = true;
+    mathfield.placeholder = '\\text{在此输入公式}';
+    mathfield.addEventListener('input', () => setStatus(''));
+    fieldHost.replaceChildren(mathfield);
+    return mathfield;
+  }
 
   function setStatus(message, isError = false) {
     if (!status) return;
@@ -116,20 +121,45 @@ function setupFormulaEditor(root) {
     });
   }
 
+  function keyboard() {
+    return window.mathVirtualKeyboard;
+  }
+
+  function syncKeyboardGeometry() {
+    const virtualKeyboard = keyboard();
+    const visible = Boolean(!dialog.hidden && virtualKeyboard?.visible);
+    const height = visible ? Math.max(0, Math.ceil(virtualKeyboard.boundingRect?.height || 0)) : 0;
+    dialog.classList.toggle('formula-dialog--keyboard-open', height > 0);
+    dialog.style.setProperty('--formula-keyboard-height', `${height}px`);
+  }
+
+  function showKeyboard() {
+    const virtualKeyboard = keyboard();
+    if (!virtualKeyboard) return;
+    // Keep the keyboard at document level so its own fixed layout spans the
+    // viewport. The formula overlay deliberately sits just below it.
+    virtualKeyboard.container = document.body;
+    virtualKeyboard.show({ animate: false });
+    window.requestAnimationFrame(syncKeyboardGeometry);
+  }
+
+  function hideKeyboard() {
+    const virtualKeyboard = keyboard();
+    if (virtualKeyboard?.visible) virtualKeyboard.hide({ animate: false });
+    syncKeyboardGeometry();
+  }
+
   function showDialog() {
-    if (typeof dialog.showModal === 'function') {
-      if (!dialog.open) dialog.showModal();
-      return;
-    }
-    dialog.setAttribute('open', '');
+    dialog.hidden = false;
+    document.body.classList.add('formula-dialog-open');
   }
 
   function hideDialog() {
-    if (typeof dialog.close === 'function' && dialog.open) {
-      dialog.close();
-      return;
+    hideKeyboard();
+    dialog.hidden = true;
+    if (!document.querySelector('[data-formula-dialog]:not([hidden])')) {
+      document.body.classList.remove('formula-dialog-open');
     }
-    dialog.removeAttribute('open');
   }
 
   function restoreTextareaSelection(start = selectionBeforeOpen.start, end = selectionBeforeOpen.end) {
@@ -143,6 +173,7 @@ function setupFormulaEditor(root) {
   }
 
   function openEditor(requestedMode) {
+    const field = ensureMathfield();
     const start = input.selectionStart ?? 0;
     const end = input.selectionEnd ?? start;
     const existing = formulaAtSelection(input.value, start, end);
@@ -155,10 +186,10 @@ function setupFormulaEditor(root) {
       : { start, end };
 
     setMode(existing?.mode || requestedMode);
-    mathfield.setValue(existing ? existing.latex : selectedText, {
+    field.setValue(existing ? existing.latex : selectedText, {
       silenceNotifications: true
     });
-    mathfield.executeCommand('moveToMathfieldEnd');
+    field.executeCommand('moveToMathfieldEnd');
 
     if (title) {
       title.textContent = existing
@@ -168,14 +199,18 @@ function setupFormulaEditor(root) {
     commitButton.textContent = existing ? '更新 Markdown 中的公式' : '插入到 Markdown';
     setStatus(existing ? '已载入光标所在的公式。' : (selectedText ? '已将选中内容载入公式编辑器。' : ''));
     showDialog();
-    window.requestAnimationFrame(() => mathfield.focus());
+    window.requestAnimationFrame(() => {
+      field.focus();
+      showKeyboard();
+    });
   }
 
   function commitFormula() {
-    const latex = mathfield.getValue('latex-without-placeholders').trim();
+    const field = ensureMathfield();
+    const latex = field.getValue('latex-without-placeholders').trim();
     if (!latex) {
       setStatus('请先输入公式内容。', true);
-      mathfield.focus();
+      field.focus();
       return;
     }
 
@@ -197,23 +232,8 @@ function setupFormulaEditor(root) {
     hideDialog();
     restoreTextareaSelection(cursor, cursor);
     input.dispatchEvent(new Event('input', { bubbles: true }));
-
-    // Keep native form semantics intact while making the programmatic edit
-    // visible to other listeners and assistive technology.
     input.dispatchEvent(new Event('change', { bubbles: true }));
     editingExistingFormula = false;
-  }
-
-  function activateTab(tabName, moveFocus = false) {
-    tabs.forEach((tab) => {
-      const active = tab.dataset.formulaTab === tabName;
-      tab.setAttribute('aria-selected', String(active));
-      tab.tabIndex = active ? 0 : -1;
-      if (active && moveFocus) tab.focus();
-    });
-    panels.forEach((panel) => {
-      panel.hidden = panel.dataset.formulaPanel !== tabName;
-    });
   }
 
   root.querySelectorAll('[data-formula-open]').forEach((button) => {
@@ -226,44 +246,7 @@ function setupFormulaEditor(root) {
       if (title) {
         title.textContent = `${editingExistingFormula ? '编辑' : '插入'}${mode === 'block' ? '独立' : '行内'}公式`;
       }
-      mathfield.focus();
-    });
-  });
-
-  root.querySelectorAll('[data-formula-insert]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const latex = button.dataset.formulaInsert || '';
-      mathfield.focus();
-      mathfield.insert(latex, {
-        format: 'latex',
-        insertionMode: 'replaceSelection',
-        selectionMode: latex.includes('#?') ? 'placeholder' : 'after',
-        focus: true,
-        feedback: false,
-        scrollIntoView: true
-      });
-      setStatus('');
-    });
-  });
-
-  root.querySelectorAll('[data-formula-command]').forEach((button) => {
-    button.addEventListener('click', () => {
-      mathfield.focus();
-      mathfield.executeCommand(button.dataset.formulaCommand);
-    });
-  });
-
-  tabs.forEach((tab, index) => {
-    tab.addEventListener('click', () => activateTab(tab.dataset.formulaTab));
-    tab.addEventListener('keydown', (event) => {
-      let nextIndex = null;
-      if (event.key === 'ArrowRight') nextIndex = (index + 1) % tabs.length;
-      if (event.key === 'ArrowLeft') nextIndex = (index - 1 + tabs.length) % tabs.length;
-      if (event.key === 'Home') nextIndex = 0;
-      if (event.key === 'End') nextIndex = tabs.length - 1;
-      if (nextIndex === null) return;
-      event.preventDefault();
-      activateTab(tabs[nextIndex].dataset.formulaTab, true);
+      ensureMathfield().focus();
     });
   });
 
@@ -285,8 +268,9 @@ function setupFormulaEditor(root) {
       commitFormula();
     }
   });
+  keyboard()?.addEventListener('geometrychange', syncKeyboardGeometry);
+  keyboard()?.addEventListener('virtual-keyboard-toggle', syncKeyboardGeometry);
 
-  mathfield.addEventListener('input', () => setStatus(''));
   root.hidden = false;
 }
 

@@ -608,6 +608,7 @@ test('真实 HTTP：视频与讨论投票可切换，讨论标题和树状回复
     body: new URLSearchParams({
       _csrf: instance.auth.csrfToken,
       parentId: String(topicId),
+      title: '回复中的补充观点',
       body: '这是对主题的回复。'
     }),
     redirect: 'manual'
@@ -628,11 +629,18 @@ test('真实 HTTP：视频与讨论投票可切换，讨论标题和树状回复
   });
   assert.deepEqual(await discussionVote.json(), { upvotes: 0, downvotes: 1, viewerVote: -1 });
 
-  const detail = await fetch(`${instance.baseUrl}${location}`);
+  const detail = await fetch(`${instance.baseUrl}${location}`, {
+    headers: { cookie: instance.auth.cookieHeader() }
+  });
   const html = await detail.text();
   assert.match(html, /关于第一幕的讨论/);
+  assert.match(html, /回复中的补充观点/);
   assert.match(html, /这是对主题的回复/);
   assert.match(html, /discussion-reply/);
+  assert.match(html, new RegExp(`id="reply-composer-${topicId}-formula-dialog"`));
+  assert.match(html, new RegExp(`name="parentId" value="${topicId}"`));
+  assert.match(html, /回复标题/);
+  assert.doesNotMatch(html, /data-formula-keyboard/);
 });
 
 test('真实 HTTP：账号会话保护上传与讨论，校验 CSRF，并支持退出后重新登录', async (t) => {

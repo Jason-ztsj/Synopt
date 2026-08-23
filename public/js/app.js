@@ -362,6 +362,36 @@
     }
   }
 
+  function setupReplyComposer(button) {
+    const panelId = button.getAttribute('aria-controls');
+    const panel = panelId ? document.getElementById(panelId) : null;
+    const closeButton = panel?.querySelector('[data-reply-close]');
+    if (!panel) return;
+
+    function setOpen(open, { focus = true } = {}) {
+      if (open) {
+        document.querySelectorAll('[data-reply-composer]:not([hidden])').forEach((otherPanel) => {
+          if (otherPanel === panel) return;
+          otherPanel.hidden = true;
+          const otherButton = document.querySelector(`[aria-controls="${CSS.escape(otherPanel.id)}"]`);
+          otherButton?.setAttribute('aria-expanded', 'false');
+          if (otherButton) otherButton.textContent = '回复';
+        });
+      }
+
+      panel.hidden = !open;
+      button.setAttribute('aria-expanded', String(open));
+      button.textContent = open ? '取消回复' : '回复';
+      if (open && focus) panel.querySelector('input[name="title"], textarea[name="body"]')?.focus();
+    }
+
+    button.addEventListener('click', () => setOpen(panel.hidden));
+    closeButton?.addEventListener('click', () => {
+      setOpen(false, { focus: false });
+      button.focus();
+    });
+  }
+
   function setupCoverPicker() {
     document.querySelectorAll('.cover-upload input[type="file"]').forEach((input) => {
       input.addEventListener('change', () => {
@@ -376,6 +406,7 @@
   document.querySelectorAll('[data-discussion-form]').forEach(setupDiscussionForm);
   document.querySelectorAll('[data-validation-watch]').forEach(setupValidationWatch);
   document.querySelectorAll('[data-vote-form]').forEach(setupVoteForm);
+  document.querySelectorAll('[data-reply-toggle]').forEach(setupReplyComposer);
   setupSidebar();
   setupCoverPicker();
   openLinkedDiscussion();

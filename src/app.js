@@ -854,7 +854,7 @@ export function createApp(options = {}) {
         if (!parent || parent.videoId !== video.id) throw new ValidationError('回复目标不存在');
       }
       const title = parent
-        ? null
+        ? (validateDiscussionTitle(request.body?.title, { required: false }) || null)
         : validateDiscussionTitle(request.body?.title || discussionTitleFromBody(bodyMarkdown));
       const clientIp = getClientIp(request, config.clientIpMode);
       const limits = [

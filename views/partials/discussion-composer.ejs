@@ -1,0 +1,35 @@
+<%
+  const isReplyComposer = Number.isSafeInteger(Number(parentId)) && Number(parentId) > 0;
+  const composerKey = typeof composerId === 'string' && composerId
+    ? composerId
+    : (isReplyComposer ? 'reply-' + parentId : 'topic');
+  const titleInputId = composerKey + '-title';
+  const replyTarget = typeof replyTo === 'string' ? replyTo : '';
+%>
+<form class="discussion-form<% if (isReplyComposer) { %> discussion-form--reply<% } %>" action="/videos/<%= videoId %>/discussions" method="post" data-discussion-form>
+  <input type="hidden" name="_csrf" value="<%= safeCsrfToken %>">
+  <% if (isReplyComposer) { %><input type="hidden" name="parentId" value="<%= parentId %>"><% } %>
+
+  <label class="field discussion-form__title" for="<%= titleInputId %>">
+    <span class="field__label"><%= isReplyComposer ? '回复标题' : '讨论标题' %> <% if (isReplyComposer) { %><small>选填</small><% } else { %><i>必填</i><% } %></span>
+    <input id="<%= titleInputId %>" type="text" name="title" maxlength="120"<% if (!isReplyComposer) { %> required<% } %> placeholder="<%= isReplyComposer ? '可用一句话突出回复观点' : '用一句话说明讨论主题' %>">
+  </label>
+
+  <div class="editor editor--compact" data-markdown-editor data-preview-endpoint="/api/markdown-preview">
+    <section class="editor__pane">
+      <div class="editor__bar"><strong><%= isReplyComposer ? '回复正文' : '正文' %></strong><span>Markdown / LaTeX</span></div>
+      <%- include('math-editor', { formulaEditorId: composerKey + '-formula-dialog' }) %>
+      <textarea name="body" rows="<%= isReplyComposer ? 5 : 7 %>" maxlength="5000" required placeholder="<%= isReplyComposer ? '回复 ' + replyTarget + '；补充依据、提出问题或继续推导……' : '展开你的问题、观点或补充资料……' %>" data-markdown-input></textarea>
+    </section>
+    <section class="editor__pane editor__preview-pane">
+      <div class="editor__bar"><strong>预览</strong><span data-preview-status>等待输入</span></div>
+      <div class="markdown-body editor__preview" data-markdown-preview><p class="editor__placeholder">格式化内容会显示在这里。</p></div>
+    </section>
+  </div>
+
+  <div class="composer-submit">
+    <p><%= isReplyComposer ? '回复会显示在当前内容下方；标题留空时只显示正文。' : '发布后默认折叠显示，读者可先看标题再决定是否展开。' %></p>
+    <button class="button <%= isReplyComposer ? 'button--quiet' : 'button--primary' %>" type="submit" data-discussion-submit><%= isReplyComposer ? '发布回复' : '发布讨论' %></button>
+  </div>
+  <p class="composer-status" data-discussion-status aria-live="polite"></p>
+</form>

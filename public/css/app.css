@@ -3534,8 +3534,8 @@ dd {
 
 .reaction-group,
 .reaction-group form,
-.discussion-actions,
-.discussion-actions form {
+.discussion-actions__bar,
+.discussion-actions__bar form {
   display: flex;
   margin: 0;
 }
@@ -3545,8 +3545,8 @@ dd {
 }
 
 .reaction-button,
-.discussion-actions button,
-.discussion-actions > a {
+.discussion-actions__bar button,
+.discussion-actions__bar > a {
   padding: 7px 11px;
   color: var(--text-soft);
   border: 1px solid var(--line-strong);
@@ -3558,14 +3558,14 @@ dd {
 }
 
 .reaction-button.is-active,
-.discussion-actions button.is-active {
+.discussion-actions__bar button.is-active {
   color: var(--blue-bright);
   border-color: rgba(76, 159, 255, 0.55);
   background: rgba(76, 159, 255, 0.14);
 }
 
 .reaction-button.is-negative,
-.discussion-actions button.is-negative {
+.discussion-actions__bar button.is-negative {
   color: var(--orange-soft);
   border-color: rgba(255, 173, 92, 0.45);
 }
@@ -3806,41 +3806,104 @@ dd {
   margin-bottom: 0;
 }
 
-.discussion-actions {
+.discussion-actions__bar {
   align-items: start;
   flex-wrap: wrap;
   gap: 5px;
 }
 
-.discussion-actions button,
-.discussion-actions > a,
-.reply-composer > summary {
+.discussion-actions__bar button,
+.discussion-actions__bar > a {
   padding: 4px 8px;
   font-size: 0.7rem;
 }
 
-.reply-composer > summary {
-  color: var(--text-muted);
-  cursor: pointer;
-  list-style: none;
+.reply-composer__toggle {
+  color: var(--text-muted) !important;
 }
 
-.reply-composer form {
-  display: flex;
-  min-width: min(560px, 72vw);
-  margin-top: 7px;
-  flex-direction: column;
-  gap: 7px;
+.reply-composer__toggle[aria-expanded="true"] {
+  color: var(--blue-bright) !important;
+  border-color: rgba(76, 159, 255, 0.45);
 }
 
-.reply-composer textarea {
+.reply-composer {
   width: 100%;
-  padding: 9px;
+  padding: 14px;
+  margin-top: 11px;
+  background: rgba(4, 11, 20, 0.62);
+  border: 1px solid rgba(117, 182, 255, 0.24);
+  border-radius: 10px;
+}
+
+.reply-composer[hidden] {
+  display: none;
+}
+
+.reply-composer__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 11px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.reply-composer__header div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.reply-composer__header strong {
   color: var(--text);
+  font-size: 0.82rem;
+}
+
+.reply-composer__header span {
+  color: var(--text-muted);
+  font-size: 0.66rem;
+}
+
+.reply-composer__header button {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  color: var(--text-muted);
+  background: transparent;
   border: 1px solid var(--line-strong);
-  border-radius: 7px;
-  background: var(--bg-deep);
-  resize: vertical;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 1rem;
+}
+
+.discussion-form {
+  width: 100%;
+}
+
+.discussion-form__title {
+  display: block;
+}
+
+.discussion-form--reply .editor {
+  grid-template-columns: 1fr;
+}
+
+.discussion-form--reply .editor__preview-pane {
+  border-top: 1px solid var(--line-strong);
+  border-left: 0;
+}
+
+.discussion-form--reply .editor textarea,
+.discussion-form--reply .editor__preview {
+  min-height: 150px;
+}
+
+.discussion-reply__title {
+  margin: 12px 0 -3px;
+  color: var(--text);
+  font-size: 0.94rem;
+  line-height: 1.4;
 }
 
 .reply-list {
@@ -4043,8 +4106,8 @@ dd {
     padding-left: 9px;
   }
 
-  .reply-composer form {
-    min-width: min(270px, 72vw);
+  .reply-composer {
+    padding: 11px;
   }
 
   .cover-upload {

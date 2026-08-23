@@ -16,13 +16,17 @@
 <article class="discussion-reply" id="discussion-<%= node.id %>" style="--reply-depth:<%= nestedDepth %>">
 <% } %>
     <header class="discussion-meta"><span class="discussion-meta__avatar" aria-hidden="true"><%= Array.from(String(author))[0] || '用' %></span><p><strong><%= author %></strong><time datetime="<%= node.createdAt %>"><%= discussionDate(node.createdAt) %></time></p></header>
+    <% if (!isTopic && node.title) { %><h4 class="discussion-reply__title"><%= node.title %></h4><% } %>
     <div class="markdown-body discussion-copy"><%- node.renderedBody %></div>
     <div class="discussion-actions">
+      <div class="discussion-actions__bar">
       <% if (user) { %>
         <form action="/discussions/<%= node.id %>/vote" method="post" data-vote-form data-vote-kind="up"><input type="hidden" name="_csrf" value="<%= safeCsrfToken %>"><input type="hidden" name="value" value="<%= node.viewerVote === 1 ? 0 : 1 %>"><button type="submit" class="<%= node.viewerVote === 1 ? 'is-active' : '' %>">认同 <strong data-upvotes><%= node.upvoteCount %></strong></button></form>
         <form action="/discussions/<%= node.id %>/vote" method="post" data-vote-form data-vote-kind="down"><input type="hidden" name="_csrf" value="<%= safeCsrfToken %>"><input type="hidden" name="value" value="<%= node.viewerVote === -1 ? 0 : -1 %>"><button type="submit" class="<%= node.viewerVote === -1 ? 'is-active is-negative' : '' %>">反对 <strong data-downvotes><%= node.downvoteCount %></strong></button></form>
-        <details class="reply-composer"><summary>回复</summary><form action="/videos/<%= videoId %>/discussions" method="post"><input type="hidden" name="_csrf" value="<%= safeCsrfToken %>"><input type="hidden" name="parentId" value="<%= node.id %>"><textarea name="body" rows="4" maxlength="5000" required placeholder="回复 <%= author %>；支持 Markdown 和 LaTeX"></textarea><button class="button button--quiet" type="submit">发布回复</button></form></details>
+        <button class="reply-composer__toggle" type="button" data-reply-toggle aria-expanded="false" aria-controls="reply-composer-<%= node.id %>">回复</button>
       <% } else { %><a href="/login?next=<%= encodeURIComponent('/videos/' + videoId + '#discussion-' + node.id) %>">登录后认同或回复</a><% } %>
+      </div>
+      <% if (user) { %><section class="reply-composer" id="reply-composer-<%= node.id %>" data-reply-composer hidden aria-label="回复 <%= author %>"><header class="reply-composer__header"><div><strong>回复 <%= author %></strong><span>使用与发起讨论相同的编辑工具</span></div><button type="button" data-reply-close aria-label="关闭回复编辑器">×</button></header><%- include('discussion-composer', { videoId: videoId, safeCsrfToken: safeCsrfToken, parentId: node.id, composerId: 'reply-composer-' + node.id, replyTo: author }) %></section><% } %>
     </div>
     <% if (node.replies.length) { %><div class="reply-list"><% node.replies.forEach(function(reply) { %><%- include('discussion-node', { node: reply, depth: depth + 1, videoId: videoId, user: user, safeCsrfToken: safeCsrfToken, discussionDate: discussionDate, plainPreview: plainPreview }) %><% }); %></div><% } %>
 <% if (isTopic) { %>
