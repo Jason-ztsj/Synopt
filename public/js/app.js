@@ -154,7 +154,19 @@
       debounceTimer = window.setTimeout(renderPreview, 150);
     });
 
-    if (input.value.trim()) renderPreview();
+    if (input.value.trim()) {
+      const disclosure = editor.closest('details');
+      if (disclosure && !disclosure.open) {
+        const renderWhenOpened = () => {
+          if (!disclosure.open) return;
+          disclosure.removeEventListener('toggle', renderWhenOpened);
+          renderPreview();
+        };
+        disclosure.addEventListener('toggle', renderWhenOpened);
+      } else {
+        renderPreview();
+      }
+    }
   }
 
   function parseRetryAfter(value) {
@@ -171,6 +183,8 @@
     const status = form.querySelector('[data-discussion-status]');
     const input = form.querySelector('[name="body"]');
     const originalButtonHtml = button?.innerHTML || '发布讨论';
+    const pendingLabel = form.dataset.submitPendingLabel || '正在发布回应……';
+    const successLabel = form.dataset.submitSuccessLabel || '发布成功，正在刷新讨论……';
     let cooldownTimer;
 
     function setFormStatus(message, isError = false) {
@@ -208,7 +222,7 @@
       event.preventDefault();
 
       if (button) button.disabled = true;
-      setFormStatus('正在发布回应……');
+      setFormStatus(pendingLabel);
 
       try {
         const response = await fetch(form.action, {
@@ -239,7 +253,7 @@
         }
 
         if (input) input.value = '';
-        setFormStatus('发布成功，正在刷新讨论……');
+        setFormStatus(successLabel);
         window.setTimeout(() => window.location.reload(), 250);
       } catch (error) {
         if (button) {
@@ -401,12 +415,436 @@
     });
   }
 
+  function setupAccountMenu(menu) {
+    const toggle = menu.querySelector('[data-account-menu-toggle]');
+    const panel = menu.querySelector('[data-account-menu-panel]');
+    if (!toggle || !panel) return;
+
+    const menuItems = () => Array.from(panel.querySelectorAll('[role="menuitem"]')).filter((item) => !item.disabled && !item.hidden);
+
+    function setOpen(open, { focus = false, focusLast = false } = {}) {
+      panel.hidden = !open;
+      toggle.setAttribute('aria-expanded', String(open));
+      if (open && focus) {
+        const items = menuItems();
+        (focusLast ? items.at(-1) : items[0])?.focus();
+      }
+    }
+
+    toggle.addEventListener('click', () => setOpen(panel.hidden));
+    toggle.addEventListener('keydown', (event) => {
+      if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      setOpen(true, { focus: true, focusLast: event.key === 'ArrowUp' || event.key === 'End' });
+    });
+
+    panel.addEventListener('keydown', (event) => {
+      const items = menuItems();
+      const currentIndex = items.indexOf(document.activeElement);
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setOpen(false);
+        toggle.focus();
+        return;
+      }
+      if (event.key === 'Tab') {
+        window.setTimeout(() => {
+          if (!menu.contains(document.activeElement)) setOpen(false);
+        });
+        return;
+      }
+      if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      let nextIndex;
+      if (event.key === 'Home') nextIndex = 0;
+      else if (event.key === 'End') nextIndex = items.length - 1;
+      else if (event.key === 'ArrowDown') nextIndex = (currentIndex + 1 + items.length) % items.length;
+      else nextIndex = (currentIndex - 1 + items.length) % items.length;
+      items[nextIndex]?.focus();
+    });
+
+    panel.addEventListener('click', (event) => {
+      if (event.target.closest('a[role="menuitem"]')) setOpen(false);
+    });
+
+    document.addEventListener('pointerdown', (event) => {
+      if (!menu.contains(event.target)) setOpen(false);
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && !panel.hidden) {
+        setOpen(false);
+        toggle.focus();
+      }
+    });
+  }
+
+  function setupConfirmationForm(form) {
+    form.addEventListener('submit', (event) => {
+      const message = form.dataset.confirmMessage;
+      if (message && !window.confirm(message)) event.preventDefault();
+    });
+  }
+
+  function setupTypedConfirmation(form) {
+    const expected = form.dataset.confirmValue || '';
+    const input = form.querySelector('[data-confirmation-input]');
+    const requiredCheck = form.querySelector('[data-confirmation-check]');
+    const submit = form.querySelector('[data-danger-submit]');
+    const status = form.querySelector('[data-confirmation-status]');
+    if (!input || !submit) return;
+
+    function update() {
+      const textMatches = input.value === expected;
+      const checked = !requiredCheck || requiredCheck.checked;
+      submit.disabled = !(textMatches && checked);
+      if (!input.value) {
+        if (status) status.textContent = '';
+      } else if (!textMatches) {
+        if (status) status.textContent = '输入的内容与确认文字不一致。';
+        status?.classList.add('is-error');
+      } else if (!checked) {
+        if (status) status.textContent = '请勾选不可恢复确认。';
+        status?.classList.add('is-error');
+      } else {
+        if (status) status.textContent = '确认文字已匹配。';
+        status?.classList.remove('is-error');
+      }
+    }
+
+    input.addEventListener('input', update);
+    requiredCheck?.addEventListener('change', update);
+    update();
+  }
+
+  function setupAvatarForm(form) {
+    const input = form.querySelector('[data-avatar-input]');
+    const preview = form.querySelector('[data-avatar-preview]');
+    const label = form.querySelector('[data-avatar-file-label]');
+    const status = form.querySelector('[data-avatar-status]');
+    if (!input) return;
+    let selectionSequence = 0;
+
+    function setStatus(message, isError = false) {
+      if (!status) return;
+      status.textContent = message;
+      status.classList.toggle('is-error', isError);
+    }
+
+    function rejectFile(message) {
+      input.value = '';
+      if (label) label.textContent = '选择图片';
+      setStatus(message, true);
+    }
+
+    input.addEventListener('change', () => {
+      const sequence = ++selectionSequence;
+      const file = input.files?.[0];
+      if (!file) {
+        if (label) label.textContent = '选择图片';
+        setStatus('');
+        return;
+      }
+      const extensionLooksSupported = /\.(?:jpe?g|png|webp)$/i.test(file.name || '');
+      if (file.type && !['image/jpeg', 'image/png', 'image/webp'].includes(file.type) && !extensionLooksSupported) {
+        rejectFile('头像必须是 JPEG、PNG 或 WebP 图片。');
+        return;
+      }
+      if (file.size > 2 * 1024 * 1024) {
+        rejectFile('头像不能超过 2 MiB。');
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (sequence !== selectionSequence || typeof reader.result !== 'string') return;
+        const image = new Image();
+        image.onload = () => {
+          if (sequence !== selectionSequence) return;
+          if (image.naturalWidth !== image.naturalHeight) {
+            rejectFile('头像必须为正方形。');
+            return;
+          }
+          if (image.naturalWidth < 128 || image.naturalWidth > 1024) {
+            rejectFile('头像尺寸必须在 128×128 至 1024×1024 像素之间。');
+            return;
+          }
+          if (preview) {
+            const previewImage = document.createElement('img');
+            previewImage.src = reader.result;
+            previewImage.alt = '';
+            preview.replaceChildren(previewImage);
+          }
+          if (label) label.textContent = file.name;
+          setStatus(`已选择 ${image.naturalWidth}×${image.naturalHeight} 像素图片，保存后生效。`);
+        };
+        image.onerror = () => {
+          if (sequence === selectionSequence) rejectFile('无法读取这张图片，请重新选择。');
+        };
+        image.src = reader.result;
+      };
+      reader.onerror = () => {
+        if (sequence === selectionSequence) rejectFile('无法读取这张图片，请重新选择。');
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  const BROWSER_NOTIFICATION_KEY = 'tongjian:browser-notifications';
+  const BROWSER_NOTIFICATION_FAILURE_KEY = 'tongjian:browser-notification-failure';
+
+  function readLocalSetting(key, fallback = '') {
+    try {
+      return window.localStorage.getItem(key) ?? fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  function writeLocalSetting(key, value) {
+    try {
+      window.localStorage.setItem(key, value);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function setupBrowserNotificationSettings(panel) {
+    const button = panel.querySelector('[data-browser-notification-button]');
+    const status = panel.querySelector('[data-browser-notification-status]');
+    if (!button || !status) return;
+
+    function render() {
+      if (!window.isSecureContext || !('Notification' in window)) {
+        button.disabled = true;
+        button.textContent = '当前环境不可用';
+        status.textContent = window.isSecureContext
+          ? '当前浏览器不支持系统通知。'
+          : '局域网 HTTP 地址不是安全上下文；请使用 HTTPS 后再启用。';
+        return;
+      }
+      button.disabled = false;
+      const locallyEnabled = readLocalSetting(BROWSER_NOTIFICATION_KEY) === 'enabled';
+      const displayFailure = readLocalSetting(BROWSER_NOTIFICATION_FAILURE_KEY);
+      if (Notification.permission === 'denied') {
+        button.disabled = true;
+        button.textContent = '已被浏览器拒绝';
+        status.textContent = '请在浏览器的站点设置中重新允许通知。';
+      } else if (Notification.permission === 'granted' && locallyEnabled) {
+        button.textContent = '停用浏览器通知';
+        status.textContent = '已启用；仅在同见页面打开期间显示。';
+      } else {
+        button.textContent = '启用浏览器通知';
+        status.textContent = displayFailure === 'constructor-unavailable'
+          ? '当前浏览器虽已授权，但不支持由打开的网页直接显示系统通知；此设备已自动停用。'
+          : Notification.permission === 'granted'
+          ? '浏览器已授权，但这台设备上的同见通知已停用。'
+          : '点击后浏览器才会请求通知权限。';
+      }
+    }
+
+    button.addEventListener('click', async () => {
+      if (!window.isSecureContext || !('Notification' in window)) return;
+      const locallyEnabled = readLocalSetting(BROWSER_NOTIFICATION_KEY) === 'enabled';
+      if (Notification.permission === 'granted' && locallyEnabled) {
+        writeLocalSetting(BROWSER_NOTIFICATION_KEY, 'disabled');
+      } else {
+        writeLocalSetting(BROWSER_NOTIFICATION_FAILURE_KEY, '');
+        const permission = Notification.permission === 'default'
+          ? await Notification.requestPermission()
+          : Notification.permission;
+        if (permission === 'granted') writeLocalSetting(BROWSER_NOTIFICATION_KEY, 'enabled');
+      }
+      window.dispatchEvent(new CustomEvent('tongjian:browser-notification-setting'));
+      render();
+    });
+
+    window.addEventListener('tongjian:browser-notification-setting', render);
+    window.addEventListener('storage', (event) => {
+      if ([BROWSER_NOTIFICATION_KEY, BROWSER_NOTIFICATION_FAILURE_KEY].includes(event.key)) render();
+    });
+    render();
+  }
+
+  function setupNotificationPoller(poller) {
+    const endpoint = poller.dataset.notificationEndpoint;
+    if (!endpoint || !window.fetch) return;
+    const tabId = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+    const seenKey = 'tongjian:notification-fingerprints';
+    const leaseKey = 'tongjian:notification-display-lease';
+    const channel = 'BroadcastChannel' in window ? new BroadcastChannel('tongjian:notifications') : null;
+    let timer;
+    let stopped = false;
+    let initialPoll = true;
+    let fingerprints;
+    try {
+      const parsed = JSON.parse(readLocalSetting(seenKey, '[]'));
+      fingerprints = new Set(Array.isArray(parsed) ? parsed.slice(-120) : []);
+    } catch {
+      fingerprints = new Set();
+    }
+
+    channel?.addEventListener('message', (event) => {
+      if (event.data?.type === 'shown' && event.data.fingerprint) fingerprints.add(event.data.fingerprint);
+    });
+
+    function updateUnreadCount(value) {
+      const count = Math.max(0, Number(value) || 0);
+      document.querySelectorAll('[data-notification-count]').forEach((node) => {
+        node.textContent = count > 99 ? '99+' : String(count);
+        node.hidden = count === 0;
+        node.setAttribute('aria-label', `${count} 条未读通知`);
+      });
+      document.querySelectorAll('[data-notification-count-text]').forEach((node) => {
+        node.textContent = String(count);
+      });
+    }
+
+    function notificationFingerprint(item) {
+      const count = Number(item.count ?? item.eventCount ?? item.event_count ?? 1) || 1;
+      const updatedAt = item.updatedAt || item.updated_at || item.createdAt || item.created_at || '';
+      return `${item.id}:${count}:${updatedAt}`;
+    }
+
+    function claimDisplayLease() {
+      const now = Date.now();
+      try {
+        const current = JSON.parse(readLocalSetting(leaseKey, '{}'));
+        if (current.owner && current.owner !== tabId && Number(current.expiresAt) > now) return false;
+        if (!writeLocalSetting(leaseKey, JSON.stringify({ owner: tabId, expiresAt: now + 15000 }))) {
+          return true;
+        }
+        const claimed = JSON.parse(readLocalSetting(leaseKey, '{}'));
+        return claimed.owner === tabId;
+      } catch {
+        return true;
+      }
+    }
+
+    function releaseDisplayLease() {
+      try {
+        const current = JSON.parse(readLocalSetting(leaseKey, '{}'));
+        if (current.owner === tabId) {
+          writeLocalSetting(leaseKey, JSON.stringify({ owner: tabId, expiresAt: 0 }));
+        }
+      } catch {
+        // A malformed or unavailable local store cannot keep a valid lease.
+      }
+    }
+
+    function remember(fingerprint) {
+      fingerprints.add(fingerprint);
+      const recent = Array.from(fingerprints).slice(-120);
+      writeLocalSetting(seenKey, JSON.stringify(recent));
+      channel?.postMessage({ type: 'shown', fingerprint });
+    }
+
+    function baselineNotifications(items) {
+      let changed = false;
+      items.forEach((item) => {
+        if (!item || item.id == null) return;
+        const fingerprint = notificationFingerprint(item);
+        if (fingerprints.has(fingerprint)) return;
+        fingerprints.add(fingerprint);
+        changed = true;
+      });
+      if (changed) writeLocalSetting(seenKey, JSON.stringify(Array.from(fingerprints).slice(-120)));
+    }
+
+    function showBrowserNotifications(items) {
+      if (!window.isSecureContext || !('Notification' in window) || Notification.permission !== 'granted'
+        || readLocalSetting(BROWSER_NOTIFICATION_KEY) !== 'enabled') {
+        baselineNotifications(items);
+        return;
+      }
+      const unseenItems = items.filter((item) => {
+        if (!item || item.id == null || item.readAt || item.read_at || item.isRead || item.is_read) return false;
+        return !fingerprints.has(notificationFingerprint(item));
+      });
+      if (unseenItems.length === 0) return;
+      if (!claimDisplayLease()) return;
+      let displayed = 0;
+      let constructorFailed = false;
+      unseenItems.forEach((item) => {
+        const fingerprint = notificationFingerprint(item);
+        try {
+          const notification = new Notification(item.title || '同见新通知', {
+            body: item.summary || item.body || item.message || '',
+            tag: `tongjian-${item.id}`,
+            renotify: true
+          });
+          // Some mobile browsers expose Notification and permission APIs but
+          // still reject the page-level constructor. Only mark the event as
+          // shown after a notification was actually created.
+          remember(fingerprint);
+          displayed += 1;
+          const link = item.link || item.url || item.targetUrl || item.target_url;
+          if (link) notification.onclick = () => {
+            window.focus();
+            window.location.assign(link);
+            notification.close();
+          };
+        } catch {
+          // Notification support can still be restricted by an OS-level policy.
+          constructorFailed = true;
+        }
+      });
+      if (constructorFailed && displayed === 0) {
+        releaseDisplayLease();
+        writeLocalSetting(BROWSER_NOTIFICATION_KEY, 'disabled');
+        writeLocalSetting(BROWSER_NOTIFICATION_FAILURE_KEY, 'constructor-unavailable');
+        window.dispatchEvent(new CustomEvent('tongjian:browser-notification-setting'));
+      }
+    }
+
+    async function poll() {
+      if (stopped) return;
+      try {
+        const response = await fetch(endpoint, { headers: { Accept: 'application/json' }, cache: 'no-store' });
+        if (response.status === 401 || response.status === 403) {
+          stopped = true;
+          return;
+        }
+        if (!response.ok) throw new Error('notification poll unavailable');
+        const payload = await response.json();
+        updateUnreadCount(payload.unreadCount ?? payload.unread_count ?? payload.count ?? 0);
+        const items = payload.notifications || payload.newNotifications || payload.new_notifications || payload.items || [];
+        if (Array.isArray(items)) {
+          if (initialPoll) baselineNotifications(items);
+          else showBrowserNotifications(items);
+        }
+        initialPoll = false;
+      } catch {
+        // The account pages remain usable during a transient polling failure.
+      }
+      if (!stopped) timer = window.setTimeout(poll, 30000);
+    }
+
+    document.addEventListener('visibilitychange', () => {
+      if (!stopped && document.visibilityState === 'visible') {
+        window.clearTimeout(timer);
+        timer = window.setTimeout(poll, 200);
+      }
+    });
+    window.addEventListener('pagehide', () => {
+      window.clearTimeout(timer);
+      channel?.close();
+    }, { once: true });
+    timer = window.setTimeout(poll, 500);
+  }
+
   document.querySelectorAll('[data-license-picker]').forEach(setupLicensePicker);
   document.querySelectorAll('[data-markdown-editor]').forEach(setupMarkdownEditor);
   document.querySelectorAll('[data-discussion-form]').forEach(setupDiscussionForm);
   document.querySelectorAll('[data-validation-watch]').forEach(setupValidationWatch);
   document.querySelectorAll('[data-vote-form]').forEach(setupVoteForm);
   document.querySelectorAll('[data-reply-toggle]').forEach(setupReplyComposer);
+  document.querySelectorAll('[data-account-menu]').forEach(setupAccountMenu);
+  document.querySelectorAll('[data-confirm-message]').forEach(setupConfirmationForm);
+  document.querySelectorAll('[data-typed-confirmation]').forEach(setupTypedConfirmation);
+  document.querySelectorAll('[data-avatar-form]').forEach(setupAvatarForm);
+  document.querySelectorAll('[data-browser-notification-settings]').forEach(setupBrowserNotificationSettings);
+  document.querySelectorAll('[data-notification-poller]').forEach(setupNotificationPoller);
   setupSidebar();
   setupCoverPicker();
   openLinkedDiscussion();

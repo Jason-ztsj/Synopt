@@ -9,6 +9,7 @@ import {
   validateDisplayName,
   validateLoginFields,
   validatePassword,
+  validateProfileFields,
   validateRegistrationFields,
   validateUsername,
   validateVideoFields
@@ -156,4 +157,17 @@ test('用户名、显示名称和密码执行明确的长度、字符与 NUL 边
       (error) => error instanceof ValidationError && error.status === 400 && message.test(error.message)
     );
   }
+});
+
+test('个人资料规范化显示名称与简介并执行长度限制', () => {
+  assert.deepEqual(validateProfileFields({ displayName: '  新名称  ', bio: '  开放影像创作者  ' }), {
+    displayName: '新名称',
+    bio: '开放影像创作者'
+  });
+  assert.equal(validateProfileFields({ displayName: '用户', bio: '' }).bio, '');
+  assert.throws(
+    () => validateProfileFields({ displayName: '用户', bio: '介'.repeat(FIELD_LIMITS.bio + 1) }),
+    /500/
+  );
+  assert.throws(() => validateProfileFields({ displayName: '用户', bio: '前\0后' }), /非法字符/);
 });

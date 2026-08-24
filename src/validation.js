@@ -12,6 +12,7 @@ export const FIELD_LIMITS = Object.freeze({
   usernameMin: 3,
   username: 32,
   displayName: 40,
+  bio: 500,
   passwordMin: 8,
   password: 128
 });
@@ -107,6 +108,17 @@ export function validateDisplayName(value) {
   }
   if (/\u0000/.test(displayName)) throw new ValidationError('显示名称包含非法字符');
   return displayName;
+}
+
+export function validateBio(value) {
+  return validateText(value, { name: '个人简介', required: false, max: FIELD_LIMITS.bio }).normalize('NFC');
+}
+
+export function validateProfileFields(input = {}) {
+  return {
+    displayName: validateDisplayName(input.displayName),
+    bio: validateBio(input.bio)
+  };
 }
 
 export function validatePassword(value) {

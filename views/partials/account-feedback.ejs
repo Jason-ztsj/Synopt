@@ -1,0 +1,18 @@
+<%
+  const feedbackErrorRaw = typeof error !== 'undefined' ? error : '';
+  const feedbackError = typeof feedbackErrorRaw === 'string'
+    ? feedbackErrorRaw
+    : (feedbackErrorRaw && feedbackErrorRaw.message ? feedbackErrorRaw.message : '');
+  const feedbackFlash = typeof flash !== 'undefined' && flash
+    ? flash
+    : (typeof success !== 'undefined' && success ? { success: success } : null);
+  const feedbackSuccess = typeof feedbackFlash === 'string'
+    ? feedbackFlash
+    : (feedbackFlash && (feedbackFlash.success || feedbackFlash.message) ? (feedbackFlash.success || feedbackFlash.message) : '');
+%>
+<% if (feedbackError) { %>
+  <div class="alert alert--error alert--compact account-feedback" role="alert"><span class="alert__icon" aria-hidden="true">!</span><p><%= feedbackError %></p></div>
+<% } %>
+<% if (feedbackSuccess) { %>
+  <div class="alert alert--success alert--compact account-feedback" role="status"><span class="alert__icon" aria-hidden="true">✓</span><p><%= feedbackSuccess %></p></div>
+<% } %>

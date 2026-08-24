@@ -19,10 +19,26 @@ services:
       SESSION_TTL_HOURS: "${SESSION_TTL_HOURS:-168}"
       SESSION_COOKIE_SECURE: "${SESSION_COOKIE_SECURE:-false}"
       CLIENT_IP_MODE: "${CLIENT_IP_MODE:-direct}"
+      FFMPEG_PATH: /usr/bin/ffmpeg
+      IMAGE_NORMALIZATION_CONCURRENCY: "${IMAGE_NORMALIZATION_CONCURRENCY:-2}"
+      IMAGE_NORMALIZATION_COOLDOWN_SECONDS: "${IMAGE_NORMALIZATION_COOLDOWN_SECONDS:-10}"
     volumes:
       - ./data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777,noexec,nosuid,nodev
+    cap_drop:
+      - ALL
     security_opt:
       - no-new-privileges:true
+    cpus: "${APP_CPUS:-2.0}"
+    mem_limit: "${APP_MEMORY_LIMIT:-1024m}"
+    memswap_limit: "${APP_MEMORY_LIMIT:-1024m}"
+    pids_limit: "${APP_PIDS_LIMIT:-96}"
+    ulimits:
+      nofile:
+        soft: 512
+        hard: 512
     healthcheck:
       test:
         - CMD

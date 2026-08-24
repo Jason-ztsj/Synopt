@@ -10,6 +10,7 @@ test('配置默认值、相对路径与 MiB 字节换算正确', () => {
   assert.equal(config.port, 3000);
   assert.equal(config.databasePath, path.join(cwd, 'data/gongying.sqlite'));
   assert.equal(config.videoStoragePath, path.join(cwd, 'data/videos'));
+  assert.equal(config.avatarStoragePath, path.join(cwd, 'data/avatars'));
   assert.equal(config.temporaryStoragePath, path.join(cwd, 'data/videos/.tmp'));
   assert.equal(config.pendingStoragePath, path.join(cwd, 'data/videos/.pending'));
   assert.equal(config.maxUploadBytes, 90 * 1024 * 1024);
@@ -23,6 +24,8 @@ test('配置默认值、相对路径与 MiB 字节换算正确', () => {
   assert.equal(config.maxVideoPixels, 8847360);
   assert.equal(config.mediaDecodeErrorRate, 0.001);
   assert.equal(config.mediaValidationThreads, 2);
+  assert.equal(config.imageNormalizationConcurrency, 2);
+  assert.equal(config.imageNormalizationCooldownSeconds, 10);
 });
 
 test('配置接受 Cloudflare 模式和绝对路径', () => {
@@ -35,7 +38,9 @@ test('配置接受 Cloudflare 模式和绝对路径', () => {
     SESSION_TTL_HOURS: '24',
     SESSION_COOKIE_SECURE: 'TRUE',
     AUTH_COOLDOWN_SECONDS: '5',
-    CLIENT_IP_MODE: 'cloudflare'
+    CLIENT_IP_MODE: 'cloudflare',
+    IMAGE_NORMALIZATION_CONCURRENCY: '4',
+    IMAGE_NORMALIZATION_COOLDOWN_SECONDS: '45'
   });
   assert.equal(config.port, 8080);
   assert.equal(config.maxUploadBytes, Math.floor(1.5 * 1024 * 1024));
@@ -44,6 +49,8 @@ test('配置接受 Cloudflare 模式和绝对路径', () => {
   assert.equal(config.sessionCookieSecure, true);
   assert.equal(config.authCooldownSeconds, 5);
   assert.equal(config.clientIpMode, 'cloudflare');
+  assert.equal(config.imageNormalizationConcurrency, 4);
+  assert.equal(config.imageNormalizationCooldownSeconds, 45);
 });
 
 test('非法配置在启动解析阶段立即报错', () => {
@@ -69,6 +76,12 @@ test('非法配置在启动解析阶段立即报错', () => {
     { MEDIA_DECODE_ERROR_RATE: '0' },
     { MEDIA_DECODE_ERROR_RATE: '1.1' },
     { MEDIA_VALIDATION_THREADS: '9' },
+    { IMAGE_NORMALIZATION_CONCURRENCY: '0' },
+    { IMAGE_NORMALIZATION_CONCURRENCY: '9' },
+    { IMAGE_NORMALIZATION_CONCURRENCY: '1.5' },
+    { IMAGE_NORMALIZATION_COOLDOWN_SECONDS: '0' },
+    { IMAGE_NORMALIZATION_COOLDOWN_SECONDS: '3601' },
+    { IMAGE_NORMALIZATION_COOLDOWN_SECONDS: '1.5' },
     { FFPROBE_PATH: ' ' }
   ];
   for (const overrides of invalid) {

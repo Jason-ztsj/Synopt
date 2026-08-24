@@ -31,7 +31,8 @@ async function removeIfPresent(filePath) {
 async function removeOldUntrackedFiles(directory, {
   trackedNames = new Set(),
   cutoffMs,
-  suffix
+  suffix,
+  suffixes
 } = {}) {
   if (!directory) return 0;
   let entries;
@@ -43,8 +44,13 @@ async function removeOldUntrackedFiles(directory, {
   }
 
   let removed = 0;
+  const acceptedSuffixes = Array.isArray(suffixes) ? suffixes : (suffix ? [suffix] : []);
   for (const entry of entries) {
-    if (!entry.isFile() || trackedNames.has(entry.name) || (suffix && !entry.name.endsWith(suffix))) continue;
+    if (
+      !entry.isFile()
+      || trackedNames.has(entry.name)
+      || (acceptedSuffixes.length > 0 && !acceptedSuffixes.some((candidate) => entry.name.endsWith(candidate)))
+    ) continue;
     const filePath = path.join(directory, entry.name);
     try {
       const fileStat = await stat(filePath);
@@ -52,14 +58,23 @@ async function removeOldUntrackedFiles(directory, {
       await unlink(filePath);
       removed += 1;
     } catch (error) {
-      if (error?.code !== 'ENOENT') throw error;
+      if (error?.code !== 'ENOENT') {
+        console.error(`孤立文件清理失败：${filePath} (${error.code || error.message})`);
+      }
     }
   }
   return removed;
 }
 
 export async function cleanupOrphanedUploads(database, config, nowDate = new Date()) {
-  const trackedNames = new Set(database.listVideoStorageNames?.() ?? []);
+  const queuedTargets = database.listFileDeletionTargets?.() ?? [];
+  const queuedNames = (kind) => queuedTargets
+    .filter((task) => task.kind === kind)
+    .map((task) => task.storageName);
+  const trackedNames = new Set([
+    ...(database.listVideoStorageNames?.() ?? []),
+    ...queuedNames('video')
+  ]);
   // A grace period avoids racing the application's rename-then-database-insert
   // window. Public media is deliberately never removed by this maintenance.
   const pendingGraceMs = Math.max(10 * 60_000, config.mediaValidationPollMs * 20);
@@ -69,13 +84,79 @@ export async function cleanupOrphanedUploads(database, config, nowDate = new Dat
   });
   const temporaryRemoved = await removeOldUntrackedFiles(config.temporaryStoragePath, {
     cutoffMs: nowDate.getTime() - 60 * 60_000,
-    suffix: '.upload'
+    suffixes: ['.upload', '.avatar-upload', '.normalized-image.webp']
   });
   const coverRemoved = await removeOldUntrackedFiles(config.coverStoragePath, {
-    trackedNames: new Set(database.listCoverStorageNames?.() ?? []),
+    trackedNames: new Set([
+      ...(database.listCoverStorageNames?.() ?? []),
+      ...queuedNames('cover')
+    ]),
     cutoffMs: nowDate.getTime() - 60 * 60_000
   });
-  return pendingRemoved + temporaryRemoved + coverRemoved;
+  const avatarRemoved = await removeOldUntrackedFiles(config.avatarStoragePath, {
+    trackedNames: new Set([
+      ...(database.listAvatarStorageNames?.() ?? []),
+      ...queuedNames('avatar')
+    ]),
+    cutoffMs: nowDate.getTime() - 60 * 60_000
+  });
+  return pendingRemoved + temporaryRemoved + coverRemoved + avatarRemoved;
+}
+
+function fileDeletionPaths(task, config) {
+  if (task.kind === 'video') {
+    // Pending must be removed before public to close the validator rename race.
+    return [
+      storagePath(config.pendingStoragePath, task.storageName),
+      storagePath(config.videoStoragePath, task.storageName)
+    ];
+  }
+  if (task.kind === 'cover') return [storagePath(config.coverStoragePath, task.storageName)];
+  if (task.kind === 'avatar') return [storagePath(config.avatarStoragePath, task.storageName)];
+  throw new MediaValidationSystemError('文件删除队列类型无效', 'INVALID_FILE_DELETION_KIND');
+}
+
+async function assertPathsAbsent(paths) {
+  for (const filePath of paths) {
+    try {
+      await stat(filePath);
+      throw new MediaValidationSystemError('待删除文件仍然存在', 'FILE_DELETION_INCOMPLETE');
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+  }
+}
+
+export async function processPendingFileDeletions(database, config, {
+  limit = 50,
+  now = () => new Date()
+} = {}) {
+  if (
+    typeof database.listPendingFileDeletions !== 'function'
+    || typeof database.completeFileDeletion !== 'function'
+    || typeof database.failFileDeletion !== 'function'
+  ) return { completed: 0, failed: 0, deferred: 0 };
+
+  const nowDate = now();
+  const nowIso = nowDate.toISOString();
+  // Retry eligibility is persisted and filtered before LIMIT in the database.
+  // This prevents a page of deferred failures from starving newer due tasks.
+  const tasks = database.listPendingFileDeletions({ limit, eligibleAt: nowIso });
+  const result = { completed: 0, failed: 0, deferred: 0 };
+  for (const task of tasks) {
+    try {
+      const paths = fileDeletionPaths(task, config);
+      for (const filePath of paths) await removeIfPresent(filePath);
+      // Verify every candidate after the ordered unlink sequence before the
+      // durable task is acknowledged.
+      await assertPathsAbsent(paths);
+      if (database.completeFileDeletion(task.id) === 1) result.completed += 1;
+    } catch (error) {
+      database.failFileDeletion(task.id, error, nowIso);
+      result.failed += 1;
+    }
+  }
+  return result;
 }
 
 export async function generateFirstFrameCover(filePath, config) {
@@ -137,30 +218,122 @@ export async function processNextValidation(database, config, {
 
   const pendingPath = storagePath(config.pendingStoragePath, video.storageName);
   const finalPath = storagePath(config.videoStoragePath, video.storageName);
+  let claimStartedAt = video.validationStartedAt;
+  let claimLost = false;
+  let claimLeaseError = null;
+  let heartbeatTimer = null;
   let candidatePath;
+  let generatedCover = null;
+  let generatedCoverRecorded = false;
+
+  const canRenewClaim = typeof database.renewVideoValidationLease === 'function'
+    && typeof claimStartedAt === 'string' && claimStartedAt.length > 0;
+  const renewClaim = () => {
+    if (!canRenewClaim) return true;
+    if (claimLost) return false;
+    const renewedAt = now().toISOString();
+    try {
+      if (database.renewVideoValidationLease(video.id, claimStartedAt, renewedAt) !== 1) {
+        claimLost = true;
+        return false;
+      }
+      claimStartedAt = renewedAt;
+      return true;
+    } catch (error) {
+      claimLost = true;
+      claimLeaseError = error;
+      return false;
+    }
+  };
+  const stopHeartbeat = () => {
+    if (heartbeatTimer !== null) clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  };
+  if (canRenewClaim) {
+    const heartbeatMs = Math.min(
+      60_000,
+      Math.max(1_000, Math.floor((config.mediaValidationStaleMs ?? 180_000) / 3))
+    );
+    heartbeatTimer = setInterval(renewClaim, heartbeatMs);
+    heartbeatTimer.unref?.();
+  }
   try {
     candidatePath = existingCandidate(pendingPath, finalPath);
     const result = await validate(candidatePath, video.mediaType, config);
-    let generatedCover = null;
     if (!video.coverStorageName && typeof database.setVideoCover === 'function') {
       generatedCover = await generateCover(candidatePath, config);
     }
+    if (!renewClaim()) {
+      throw new MediaValidationSystemError(
+        '验证任务租约已经失效',
+        'VALIDATION_CLAIM_LOST',
+        { cause: claimLeaseError?.message }
+      );
+    }
     if (candidatePath === pendingPath) await rename(pendingPath, finalPath);
-    if (generatedCover) database.setVideoCover(video.id, generatedCover);
-    const changed = database.completeVideoValidation(video.id, result, now().toISOString());
+    if (generatedCover) {
+      const coverChanged = database.setVideoCover(video.id, generatedCover, claimStartedAt);
+      if (coverChanged !== 1) {
+        await removeIfPresent(storagePath(config.coverStoragePath, generatedCover.storageName));
+        generatedCover = null;
+        throw new MediaValidationSystemError(
+          '验证完成时稿件已被删除或状态已改变',
+          'VALIDATION_STATE_CONFLICT'
+        );
+      }
+      generatedCoverRecorded = true;
+    }
+    stopHeartbeat();
+    const changed = database.completeVideoValidation(
+      video.id,
+      result,
+      now().toISOString(),
+      claimStartedAt
+    );
     if (changed !== 1) {
       throw new MediaValidationSystemError('验证完成时数据库状态已改变', 'VALIDATION_STATE_CONFLICT');
     }
     console.log(`媒体验证通过：${video.id} (${result.videoCodec}/${result.audioCodec ?? 'silent'}, ${result.warningCount} warnings)`);
   } catch (error) {
-    const finishedAt = now().toISOString();
-    if (error instanceof MediaRejectedError) {
-      await removeIfPresent(candidatePath ?? pendingPath);
-      if (candidatePath === finalPath) await removeIfPresent(finalPath);
-      if (video.coverStorageName && config.coverStoragePath) {
-        await removeIfPresent(storagePath(config.coverStoragePath, video.coverStorageName));
+    stopHeartbeat();
+    if (generatedCover && !generatedCoverRecorded && config.coverStoragePath) {
+      try {
+        await removeIfPresent(storagePath(config.coverStoragePath, generatedCover.storageName));
+      } catch (cleanupError) {
+        console.error(`未入库封面清理失败：${video.id} (${cleanupError.code || cleanupError.message})`);
       }
-      database.rejectVideoValidation(video.id, error.summary, finishedAt);
+    }
+    const finishedAt = now().toISOString();
+    if (!renewClaim()) {
+      console.warn(`媒体验证结果已放弃：${video.id}（任务租约已由其他 worker 接管）`);
+      return true;
+    }
+    if (error instanceof MediaRejectedError) {
+      const changed = database.rejectVideoValidation(
+        video.id,
+        error.summary,
+        finishedAt,
+        claimStartedAt
+      );
+      if (changed !== 1) {
+        console.warn(`媒体验证拒绝结果未写入：${video.id}（稿件状态已改变）`);
+        return true;
+      }
+      const cleanupPaths = new Set([candidatePath ?? pendingPath]);
+      if (candidatePath === finalPath) cleanupPaths.add(finalPath);
+      if (video.coverStorageName && config.coverStoragePath) {
+        cleanupPaths.add(storagePath(config.coverStoragePath, video.coverStorageName));
+      }
+      for (const cleanupPath of cleanupPaths) {
+        try {
+          await removeIfPresent(cleanupPath);
+        } catch (cleanupError) {
+          // rejectVideoValidation durably queued every referenced asset before
+          // this best-effort cleanup, so an unlink failure must not stop the
+          // worker or leave the media in validating forever.
+          console.error(`拒绝媒体即时清理失败：${video.id} (${cleanupError.code || cleanupError.message})`);
+        }
+      }
       console.warn(`媒体验证拒绝：${video.id} (${error.code})`);
       return true;
     }
@@ -169,9 +342,16 @@ export async function processNextValidation(database, config, {
       : new MediaValidationSystemError('媒体验证发生内部错误', 'VALIDATION_INTERNAL_ERROR', {
         cause: error?.message || String(error)
       });
-    database.failVideoValidation(video.id, systemError.summary, finishedAt);
-    console.error(`媒体验证暂时失败：${video.id} (${systemError.code})`);
+    const changed = database.failVideoValidation(
+      video.id,
+      systemError.summary,
+      finishedAt,
+      claimStartedAt
+    );
+    if (changed === 1) console.error(`媒体验证暂时失败：${video.id} (${systemError.code})`);
+    else console.warn(`媒体验证失败结果未写入：${video.id}（稿件状态已改变）`);
   }
+  stopHeartbeat();
   return true;
 }
 
@@ -184,7 +364,15 @@ export async function runValidatorWorker({
   fs.mkdirSync(config.videoStoragePath, { recursive: true });
   fs.mkdirSync(config.pendingStoragePath, { recursive: true });
   if (config.coverStoragePath) fs.mkdirSync(config.coverStoragePath, { recursive: true });
+  if (config.avatarStoragePath) fs.mkdirSync(config.avatarStoragePath, { recursive: true });
   const startupTime = now();
+  const startupDeletions = await processPendingFileDeletions(database, config, { now: () => startupTime });
+  if (startupDeletions.completed > 0) {
+    console.warn(`已完成 ${startupDeletions.completed} 个持久文件删除任务`);
+  }
+  if (startupDeletions.failed > 0) {
+    console.error(`${startupDeletions.failed} 个文件删除任务失败，将按退避策略重试`);
+  }
   const orphanCount = await cleanupOrphanedUploads(database, config, startupTime);
   if (orphanCount > 0) console.warn(`已清理 ${orphanCount} 个中断上传留下的隔离文件`);
   const cutoff = new Date(startupTime.getTime() - config.mediaValidationStaleMs).toISOString();
@@ -208,6 +396,9 @@ export async function runValidatorWorker({
         if (staleCount > 0) console.warn(`已重新排队 ${staleCount} 个超时的媒体验证任务`);
         const removed = await cleanupOrphanedUploads(database, config, loopTime);
         if (removed > 0) console.warn(`已清理 ${removed} 个中断上传留下的隔离文件`);
+        const deletions = await processPendingFileDeletions(database, config, { now: () => loopTime });
+        if (deletions.completed > 0) console.warn(`已完成 ${deletions.completed} 个持久文件删除任务`);
+        if (deletions.failed > 0) console.error(`${deletions.failed} 个文件删除任务失败，将按退避策略重试`);
         nextStaleSweepAt = loopTime.getTime() + staleSweepIntervalMs;
       }
       const processed = await processNextValidation(database, config, { now });

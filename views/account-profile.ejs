@@ -1,0 +1,74 @@
+<%
+  const profileAccount = typeof account !== 'undefined' && account && typeof account === 'object'
+    ? account
+    : (typeof currentUser !== 'undefined' && currentUser ? currentUser : {});
+  const profileForm = typeof form !== 'undefined' && form && typeof form === 'object' ? form : {};
+  const profileStats = typeof stats !== 'undefined' && stats && typeof stats === 'object' ? stats : {};
+  const profileCsrf = typeof csrfToken === 'string' ? csrfToken : '';
+  const profileUsername = profileAccount.username || '';
+  const profileDisplayName = profileForm.displayName || profileForm.display_name || profileAccount.displayName || profileAccount.display_name || profileUsername || '用户';
+  const profileBio = Object.prototype.hasOwnProperty.call(profileForm, 'bio') ? profileForm.bio : (profileAccount.bio || '');
+  const profileAvatarUrl = profileAccount.avatarUrl || profileAccount.avatar_url
+    || ((profileAccount.hasAvatar || profileAccount.avatarStorageName || profileAccount.avatar_storage_name) && profileUsername
+      ? '/users/' + encodeURIComponent(profileUsername) + '/avatar?v=' + encodeURIComponent(profileAccount.avatarStorageName || profileAccount.avatar_storage_name || profileAccount.updatedAt || profileAccount.updated_at || '1')
+      : '');
+  const joined = profileAccount.createdAt || profileAccount.created_at;
+  const joinedDate = joined && !Number.isNaN(new Date(joined).getTime())
+    ? new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' }).format(new Date(joined))
+    : '';
+  const videoTotal = Number(profileStats.videoCount ?? profileStats.video_count ?? profileAccount.videoCount ?? 0) || 0;
+  const discussionTotal = Number(profileStats.discussionCount ?? profileStats.discussion_count ?? profileAccount.discussionCount ?? 0) || 0;
+  const receivedVotes = Number(profileStats.receivedUpvoteCount ?? profileStats.received_upvote_count ?? profileAccount.receivedUpvoteCount ?? 0) || 0;
+%>
+<%- include('partials/head', { pageTitle: '个人信息｜同见', pageDescription: '管理你在同见展示的名称、简介和头像。' }) %>
+<body class="page page--account">
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  <%- include('partials/header', { currentPath: '/account/profile' }) %>
+  <div class="app-shell shell">
+    <%- include('partials/sidebar', { currentPath: '/account/profile', categoryTree: typeof categoryTree !== 'undefined' ? categoryTree : [] }) %>
+    <main id="main-content" class="account-main" tabindex="-1">
+      <header class="account-heading">
+        <div><p class="eyebrow"><span></span> 个人账号</p><h1>个人信息</h1><p>这些资料会出现在你的公开主页、稿件和讨论旁。</p></div>
+        <% if (profileUsername) { %><a class="button button--quiet" href="/users/<%= encodeURIComponent(profileUsername) %>">查看公开主页 <span aria-hidden="true">↗</span></a><% } %>
+      </header>
+
+      <div class="account-layout">
+        <%- include('partials/account-navigation', { currentPath: '/account/profile' }) %>
+        <div class="account-content">
+          <%- include('partials/account-feedback') %>
+
+          <section class="profile-overview" aria-label="账号概览">
+            <div class="profile-overview__identity">
+              <span class="profile-avatar" aria-hidden="true"><% if (profileAvatarUrl) { %><img src="<%= profileAvatarUrl %>" alt=""><% } else { %><%= Array.from(String(profileDisplayName))[0] || '用' %><% } %></span>
+              <div><h2><%= profileDisplayName %></h2><p>@<%= profileUsername %><% if (joinedDate) { %> · <%= joinedDate %> 加入<% } %></p></div>
+            </div>
+            <dl class="profile-stats"><div><dt>稿件</dt><dd><%= videoTotal %></dd></div><div><dt>讨论</dt><dd><%= discussionTotal %></dd></div><div><dt>收到认同</dt><dd><%= receivedVotes %></dd></div></dl>
+          </section>
+
+          <section class="account-panel" aria-labelledby="profile-form-title">
+            <header class="account-panel__heading"><div><span>01</span><h2 id="profile-form-title">公开资料</h2></div><p>用户名是稳定地址的一部分，创建后不可修改。</p></header>
+            <form class="account-form" action="/account/profile" method="post" enctype="multipart/form-data" data-avatar-form>
+              <input type="hidden" name="_csrf" value="<%= profileCsrf %>">
+              <div class="field-grid field-grid--account">
+                <label class="field"><span class="field__label">用户名</span><input type="text" value="<%= profileUsername %>" disabled aria-describedby="username-hint"><span class="field__hint" id="username-hint">你的公开地址：/users/<%= profileUsername %></span></label>
+                <label class="field"><span class="field__label">显示名 <i>必填</i></span><input type="text" name="displayName" value="<%= profileDisplayName %>" maxlength="40" autocomplete="nickname" required><span class="field__hint">最多 40 个字符，可以是笔名或团体名称</span></label>
+                <label class="field field--wide"><span class="field__label">个人简介 <small>选填</small></span><textarea name="bio" rows="4" maxlength="500" placeholder="简单介绍你关心的主题或创作方向……"><%= profileBio %></textarea><span class="field__hint">纯文本，最多 500 个字符</span></label>
+              </div>
+              <div class="avatar-field">
+                <div class="avatar-field__preview" data-avatar-preview aria-hidden="true"><% if (profileAvatarUrl) { %><img src="<%= profileAvatarUrl %>" alt=""><% } else { %><span><%= Array.from(String(profileDisplayName))[0] || '用' %></span><% } %></div>
+                <label class="avatar-field__picker"><strong>更换头像 <small>选填</small></strong><span>JPEG、PNG 或 WebP，必须为正方形，128–1024 像素，不超过 2 MiB。</span><input type="file" name="avatar" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" data-avatar-input><span class="button button--quiet" data-avatar-file-label>选择图片</span></label>
+              </div>
+              <p class="avatar-field__status" data-avatar-status aria-live="polite"></p>
+              <div class="account-form__actions"><button class="button button--primary" type="submit">保存个人信息</button></div>
+            </form>
+            <% if (profileAvatarUrl) { %>
+              <form class="account-inline-form" action="/account/avatar/delete" method="post" data-confirm-message="确定删除当前头像吗？届时将恢复为文字头像。"><input type="hidden" name="_csrf" value="<%= profileCsrf %>"><button class="text-danger-button" type="submit">删除当前头像</button></form>
+            <% } %>
+          </section>
+        </div>
+      </div>
+    </main>
+  </div>
+  <%- include('partials/footer') %>
+</body>
+</html>

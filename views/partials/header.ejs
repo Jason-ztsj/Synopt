@@ -5,6 +5,18 @@
   const headerUsername = headerUser ? (headerUser.username || '') : '';
   const headerAvatar = Array.from(String(headerDisplayName))[0] || '用';
   const headerCsrfToken = typeof csrfToken === 'string' ? csrfToken : '';
+  const headerAvatarUrl = headerUser && (headerUser.avatarUrl || headerUser.avatar_url)
+    ? (headerUser.avatarUrl || headerUser.avatar_url)
+    : (headerUser && (headerUser.hasAvatar || headerUser.avatarStorageName || headerUser.avatar_storage_name) && headerUsername
+      ? '/users/' + encodeURIComponent(headerUsername) + '/avatar?v=' + encodeURIComponent(headerUser.avatarStorageName || headerUser.avatar_storage_name || headerUser.updatedAt || headerUser.updated_at || '1')
+      : '');
+  const rawUnreadCount = typeof notificationUnreadCount !== 'undefined'
+    ? notificationUnreadCount
+    : (typeof unreadNotificationCount !== 'undefined'
+      ? unreadNotificationCount
+      : (headerUser ? (headerUser.unreadNotificationCount || headerUser.unread_notification_count || 0) : 0));
+  const headerUnreadCount = Math.max(0, Number(rawUnreadCount) || 0);
+  const accountMenuId = 'account-menu-panel';
 %>
 <header class="site-header">
   <div class="site-header__inner shell">
@@ -26,19 +38,36 @@
           <span aria-hidden="true">＋</span> 发布视频
         </a>
       </nav>
-      <nav class="account-nav" aria-label="账号导航">
+      <nav class="account-nav" aria-label="账号导航"<% if (headerUser) { %> data-notification-poller data-notification-endpoint="/account/notifications/poll"<% } %>>
         <% if (headerUser) { %>
-          <span class="account-chip" title="已登录<% if (headerUsername) { %>：@<%= headerUsername %><% } %>">
-            <span class="account-chip__avatar" aria-hidden="true"><%= headerAvatar %></span>
-            <span class="account-chip__copy">
-              <strong><%= headerDisplayName %></strong>
-              <% if (headerUsername && headerUsername !== headerDisplayName) { %><small>@<%= headerUsername %></small><% } %>
-            </span>
-          </span>
-          <form class="account-nav__logout-form" action="/logout" method="post">
-            <input type="hidden" name="_csrf" value="<%= headerCsrfToken %>">
-            <button class="account-nav__logout" type="submit">退出</button>
-          </form>
+          <div class="account-menu" data-account-menu>
+            <button class="account-chip" type="button" title="已登录<% if (headerUsername) { %>：@<%= headerUsername %><% } %>" aria-haspopup="menu" aria-expanded="false" aria-controls="<%= accountMenuId %>" data-account-menu-toggle>
+              <span class="account-chip__avatar" aria-hidden="true"><% if (headerAvatarUrl) { %><img src="<%= headerAvatarUrl %>" alt=""><% } else { %><%= headerAvatar %><% } %></span>
+              <span class="account-chip__copy">
+                <strong><%= headerDisplayName %></strong>
+                <% if (headerUsername && headerUsername !== headerDisplayName) { %><small>@<%= headerUsername %></small><% } %>
+              </span>
+              <span class="account-chip__unread" data-notification-count<% if (!headerUnreadCount) { %> hidden<% } %> aria-label="<%= headerUnreadCount %> 条未读通知"><%= headerUnreadCount > 99 ? '99+' : headerUnreadCount %></span>
+              <svg class="account-chip__chevron" aria-hidden="true" viewBox="0 0 12 8"><path d="m1 1 5 5 5-5"></path></svg>
+            </button>
+            <div class="account-menu__panel" id="<%= accountMenuId %>" role="menu" aria-label="<%= headerDisplayName %> 的账号菜单" data-account-menu-panel hidden>
+              <header class="account-menu__identity">
+                <span class="account-chip__avatar" aria-hidden="true"><% if (headerAvatarUrl) { %><img src="<%= headerAvatarUrl %>" alt=""><% } else { %><%= headerAvatar %><% } %></span>
+                <span><strong><%= headerDisplayName %></strong><small><%= headerUsername ? '@' + headerUsername : '已登录用户' %></small></span>
+              </header>
+              <div class="account-menu__links">
+                <a href="/account/profile" role="menuitem"<% if (activePath.startsWith('/account/profile')) { %> aria-current="page"<% } %>><span aria-hidden="true">○</span><strong>个人信息</strong></a>
+                <a href="/account/videos" role="menuitem"<% if (activePath.startsWith('/account/videos')) { %> aria-current="page"<% } %>><span aria-hidden="true">▷</span><strong>我的稿件</strong></a>
+                <a href="/account/settings" role="menuitem"<% if (activePath.startsWith('/account/settings')) { %> aria-current="page"<% } %>><span aria-hidden="true">⌘</span><strong>设置</strong></a>
+                <a href="/account/discussions" role="menuitem"<% if (activePath.startsWith('/account/discussions')) { %> aria-current="page"<% } %>><span aria-hidden="true">≡</span><strong>我的讨论</strong></a>
+                <a href="/account/notifications" role="menuitem"<% if (activePath.startsWith('/account/notifications')) { %> aria-current="page"<% } %>><span aria-hidden="true">◇</span><strong>通知</strong><small class="account-menu__badge" data-notification-count<% if (!headerUnreadCount) { %> hidden<% } %>><%= headerUnreadCount > 99 ? '99+' : headerUnreadCount %></small></a>
+              </div>
+              <form class="account-menu__logout" action="/logout" method="post">
+                <input type="hidden" name="_csrf" value="<%= headerCsrfToken %>">
+                <button type="submit" role="menuitem"><span aria-hidden="true">→</span><strong>退出登录</strong></button>
+              </form>
+            </div>
+          </div>
         <% } else { %>
           <a class="account-nav__login" href="/login"<% if (activePath === '/login') { %> aria-current="page"<% } %>>登录</a>
           <a class="account-nav__register" href="/register"<% if (activePath === '/register') { %> aria-current="page"<% } %>>注册</a>

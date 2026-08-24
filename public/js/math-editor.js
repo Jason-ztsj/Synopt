@@ -94,6 +94,42 @@ function setupFormulaEditor(root) {
   let selectionBeforeOpen = { start: 0, end: 0 };
   let editingExistingFormula = false;
 
+  function dialogFocusableElements() {
+    return [...dialog.querySelectorAll(
+      'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), math-field, [tabindex]:not([tabindex="-1"])'
+    )].filter((element) => !element.hidden && element.getAttribute('aria-hidden') !== 'true');
+  }
+
+  function handleDialogKeydown(event) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      cancelEditing();
+      return;
+    }
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      commitFormula();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const focusable = dialogFocusableElements();
+    if (focusable.length === 0) {
+      event.preventDefault();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable.at(-1);
+    const active = document.activeElement;
+    if (event.shiftKey && (active === first || !dialog.contains(active))) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
   function ensureMathfield() {
     if (mathfield) return mathfield;
     mathfield = new MathfieldElement();
@@ -105,6 +141,10 @@ function setupFormulaEditor(root) {
     mathfield.placeholder = '\\text{在此输入公式}';
     mathfield.addEventListener('input', () => setStatus(''));
     fieldHost.replaceChildren(mathfield);
+    // MathLive handles physical keys inside its open shadow root. Escape does
+    // not cross that boundary, so listen at the shadow root as well as on the
+    // surrounding dialog to preserve normal modal keyboard behaviour.
+    mathfield.shadowRoot?.addEventListener('keydown', handleDialogKeydown, { capture: true });
     return mathfield;
   }
 
@@ -262,12 +302,7 @@ function setupFormulaEditor(root) {
   dialog.addEventListener('click', (event) => {
     if (event.target === dialog) cancelEditing();
   });
-  dialog.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
-      event.preventDefault();
-      commitFormula();
-    }
-  });
+  dialog.addEventListener('keydown', handleDialogKeydown, { capture: true });
   keyboard()?.addEventListener('geometrychange', syncKeyboardGeometry);
   keyboard()?.addEventListener('virtual-keyboard-toggle', syncKeyboardGeometry);
 

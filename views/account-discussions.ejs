@@ -1,0 +1,99 @@
+<%
+  const accountDiscussions = typeof discussions !== 'undefined' && Array.isArray(discussions) ? discussions : [];
+  const discussionsCsrf = typeof csrfToken === 'string' ? csrfToken : '';
+  const discussionsPagination = typeof pagination !== 'undefined' && pagination && typeof pagination === 'object' ? pagination : {};
+  const discussionsPage = Math.max(1, Number(discussionsPagination.page ?? discussionsPagination.currentPage ?? 1) || 1);
+  const discussionsPages = Math.max(1, Number(discussionsPagination.totalPages ?? discussionsPagination.pages ?? 1) || 1);
+  const discussionsTotal = Math.max(0, Number(discussionsPagination.total ?? discussionsPagination.totalItems ?? accountDiscussions.length) || 0);
+  const discussionDate = function(value) {
+    const date = value ? new Date(value) : null;
+    return date && !Number.isNaN(date.getTime())
+      ? new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date)
+      : '';
+  };
+  const plainDiscussionPreview = function(value) {
+    return String(value || '').replace(/[`*_>#\[\]$]/g, '').replace(/\s+/g, ' ').trim().slice(0, 220);
+  };
+%>
+<%- include('partials/head', { pageTitle: '我的讨论｜同见', pageDescription: '查看、修改或删除你在同见发布的讨论和回复。', includeMathEditor: true }) %>
+<body class="page page--account page--account-discussions">
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  <%- include('partials/header', { currentPath: '/account/discussions' }) %>
+  <div class="app-shell shell">
+    <%- include('partials/sidebar', { currentPath: '/account/discussions', categoryTree: typeof categoryTree !== 'undefined' ? categoryTree : [] }) %>
+    <main id="main-content" class="account-main" tabindex="-1">
+      <header class="account-heading"><div><p class="eyebrow"><span></span> 个人账号</p><h1>我的讨论</h1><p>回看你发起的主题和发出的回复。修改后，页面会公开标注次数和最后修改时间。</p></div></header>
+
+      <div class="account-layout">
+        <%- include('partials/account-navigation', { currentPath: '/account/discussions' }) %>
+        <div class="account-content">
+          <%- include('partials/account-feedback') %>
+          <div class="account-list-summary"><p><strong><%= discussionsTotal %></strong> 条讨论与回复</p><span>每页最多 20 条</span></div>
+
+          <% if (!accountDiscussions.length) { %>
+            <section class="account-empty"><span aria-hidden="true">≡</span><h2>还没有讨论</h2><p>在一段视频下提出问题、补充资料或回应他人。</p><a class="button button--quiet" href="/">去看看视频</a></section>
+          <% } else { %>
+            <div class="account-discussion-list">
+              <% accountDiscussions.forEach(function(discussion) {
+                const deleted = Boolean(discussion.deletedAt || discussion.deleted_at);
+                const isReply = Boolean(discussion.parentId || discussion.parent_id);
+                const body = discussion.bodyMarkdown ?? discussion.body_markdown ?? '';
+                const title = discussion.title || (isReply ? '无标题回复' : plainDiscussionPreview(body).slice(0, 72) || '无标题讨论');
+                const videoTitle = discussion.videoTitle || discussion.video_title || (discussion.videoDeletedAt || discussion.video_deleted_at ? '已删除作品' : '相关作品');
+                const editCount = Math.max(0, Number(discussion.editCount ?? discussion.edit_count ?? 0) || 0);
+                const editedAt = discussion.editedAt || discussion.edited_at;
+                const replyCount = Math.max(0, Number(discussion.replyCount ?? discussion.reply_count ?? 0) || 0);
+                const upvotes = Math.max(0, Number(discussion.upvoteCount ?? discussion.upvote_count ?? 0) || 0);
+                const downvotes = Math.max(0, Number(discussion.downvoteCount ?? discussion.downvote_count ?? 0) || 0);
+              %>
+                <article class="account-discussion-card<% if (deleted) { %> is-deleted<% } %>" id="discussion-<%= discussion.id %>">
+                  <header class="account-discussion-card__context">
+                    <span><%= isReply ? '回复' : '讨论主题' %></span>
+                    <a href="/videos/<%= discussion.videoId || discussion.video_id %>#discussion-<%= discussion.id %>"><%= videoTitle %> <span aria-hidden="true">↗</span></a>
+                  </header>
+                  <div class="account-discussion-card__body">
+                    <h2><%= deleted ? '该内容已被你删除' : title %></h2>
+                    <% if (deleted) { %><p class="discussion-tombstone-copy">为保留其他人的回复关系，这里只留下一个不含作者信息的墓碑。</p><% } else { %><p><%= plainDiscussionPreview(body) %></p><% } %>
+                  </div>
+                  <footer class="account-discussion-card__meta">
+                    <span><time datetime="<%= discussion.createdAt || discussion.created_at %>"><%= discussionDate(discussion.createdAt || discussion.created_at) %></time></span>
+                    <% if (!deleted) { %><span>认同 <strong><%= upvotes %></strong></span><span>反对 <strong><%= downvotes %></strong></span><span>回复 <strong><%= replyCount %></strong></span><% } %>
+                    <% if (!deleted && editCount > 0 && editedAt) { %><span class="edit-history">已修改 <strong><%= editCount %></strong> 次 · 最后修改于 <time datetime="<%= editedAt %>"><%= discussionDate(editedAt) %></time></span><% } %>
+                  </footer>
+                  <% if (!deleted) { %>
+                    <div class="account-discussion-card__actions">
+                      <details class="discussion-edit-disclosure">
+                        <summary>修改内容</summary>
+                        <div class="discussion-edit-disclosure__editor">
+                          <%- include('partials/discussion-composer', {
+                            videoId: discussion.videoId || discussion.video_id,
+                            safeCsrfToken: discussionsCsrf,
+                            parentId: null,
+                            composerMode: 'edit',
+                            isReply: isReply,
+                            composerId: 'account-edit-' + discussion.id,
+                            formAction: '/discussions/' + discussion.id + '/edit',
+                            titleValue: discussion.title || '',
+                            bodyValue: body,
+                            replyTo: '',
+                            submitLabel: '保存修改',
+                            returnTo: '/account/discussions?page=' + discussionsPage + '#discussion-' + discussion.id
+                          }) %>
+                        </div>
+                      </details>
+                      <form action="/discussions/<%= discussion.id %>/delete" method="post" data-confirm-message="<%= replyCount > 0 ? '这条内容已有回复。删除后将清空作者、标题、正文和票数，但保留匿名墓碑与子回复。继续吗？' : '确定删除这条内容吗？它尚无回复，删除后将从页面中消失。' %>"><input type="hidden" name="_csrf" value="<%= discussionsCsrf %>"><input type="hidden" name="returnTo" value="/account/discussions?page=<%= discussionsPage %>#discussion-<%= discussion.id %>"><button class="text-danger-button" type="submit">删除</button></form>
+                    </div>
+                  <% } %>
+                </article>
+              <% }); %>
+            </div>
+          <% } %>
+
+          <% if (discussionsPages > 1) { %><nav class="account-pagination" aria-label="讨论分页"><% if (discussionsPage > 1) { %><a href="?page=<%= discussionsPage - 1 %>">← 上一页</a><% } else { %><span></span><% } %><strong>第 <%= discussionsPage %> / <%= discussionsPages %> 页</strong><% if (discussionsPage < discussionsPages) { %><a href="?page=<%= discussionsPage + 1 %>">下一页 →</a><% } else { %><span></span><% } %></nav><% } %>
+        </div>
+      </div>
+    </main>
+  </div>
+  <%- include('partials/footer') %>
+</body>
+</html>

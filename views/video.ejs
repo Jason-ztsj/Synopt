@@ -3,9 +3,12 @@
   const description = typeof video.description === 'string' ? video.description.trim() : '';
   const ready = ['ready', 'ready_with_warnings'].includes(video.validationStatus);
   const user = typeof currentUser !== 'undefined' && currentUser ? currentUser : null;
+  const deleted = Boolean(video.deletedAt || video.deleted_at);
+  const withdrawn = Boolean(video.withdrawnAt || video.withdrawn_at);
+  const isOwner = Boolean(user) && (Boolean(video.isOwner || video.is_owner) || (video.userId && user.id && video.userId === user.id));
   const safeCsrfToken = typeof csrfToken === 'string' ? csrfToken : '';
   const safeTree = typeof discussionTree !== 'undefined' && Array.isArray(discussionTree) ? discussionTree : [];
-  const discussionCount = Array.isArray(discussions) ? discussions.length : 0;
+  const discussionCount = typeof discussions !== 'undefined' && Array.isArray(discussions) ? discussions.length : 0;
   const errorMessage = typeof discussionError === 'string' ? discussionError : '';
   const publisher = video.accountDisplayName || video.accountUsername || '';
   const created = video.createdAt ? new Date(video.createdAt) : null;
@@ -30,9 +33,9 @@
   };
 %>
 <%- include('partials/head', {
-  pageTitle: video.title + '｜同见',
-  pageDescription: description || ('观看 ' + video.creator + ' 创作的《' + video.title + '》。'),
-  includeMathEditor: Boolean(user)
+  pageTitle: (deleted ? '已删除作品' : video.title) + '｜同见',
+  pageDescription: deleted ? '这份作品已由发布者永久删除，已有讨论作为存档保留。' : (description || ('观看 ' + video.creator + ' 创作的《' + video.title + '》。')),
+  includeMathEditor: Boolean(user && !deleted)
 }) %>
 <body class="page page--video-detail">
   <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -42,6 +45,10 @@
     <main id="main-content" class="video-detail" tabindex="-1">
       <a class="detail-back" href="/">← 返回视频目录</a>
 
+      <% if (deleted) { %>
+        <section class="deleted-work-archive" aria-labelledby="deleted-work-title"><span class="deleted-work-archive__mark" aria-hidden="true">×</span><p class="eyebrow"><span></span> 讨论存档</p><h1 id="deleted-work-title">作品已由发布者永久删除</h1><p>视频、封面及标题、简介、创作者等可识别元数据已清除。为保留其他人的对话，下方只读展示已有讨论。</p></section>
+      <% } else { %>
+      <% if (withdrawn && isOwner) { %><div class="validation-banner validation-banner--withdrawn" role="status"><strong>这份稿件已撤回</strong><p>只有你能打开当前页面，它不会出现在首页、搜索或公开主页中。<a href="/account/videos#video-<%= videoId %>">前往“我的稿件”重新发布</a>。</p></div><% } %>
       <% if (video.validationStatus === 'ready_with_warnings') { %><div class="validation-banner validation-banner--warning" role="status"><strong>媒体已通过验证，但检测到少量可恢复问题</strong><p>个别位置在部分设备上可能短暂花屏、卡顿或出现声音异常。</p></div><% } %>
 
       <% if (ready) { %>
@@ -59,9 +66,11 @@
         <div class="watch-heading__context"><% if (video.categoryName) { %><a href="/categories/<%= video.categorySlug %>"><%= video.categoryName %></a><span>·</span><% } %><span><%= formattedDate %></span><% if (durationText) { %><span>·</span><span><%= durationText %></span><% } %></div>
         <h1><%= video.title %></h1>
         <div class="watch-heading__row">
-          <div class="creator-line"><span class="creator-line__avatar" aria-hidden="true"><%= Array.from(String(publisher || video.creator))[0] || '同' %></span><p><strong><%= video.creator %></strong><% if (publisher) { %><small>由 <%= publisher %> 发布</small><% } %></p></div>
+          <div class="creator-line"><span class="creator-line__avatar" aria-hidden="true"><% if (video.accountUsername && video.accountAvatarStorageName) { %><img src="/users/<%= encodeURIComponent(video.accountUsername) %>/avatar?v=<%= encodeURIComponent(video.accountAvatarStorageName) %>" alt=""><% } else { %><%= Array.from(String(publisher || video.creator))[0] || '同' %><% } %></span><p><strong><%= video.creator %></strong><% if (publisher) { %><small>由 <% if (video.accountUsername) { %><a href="/users/<%= encodeURIComponent(video.accountUsername) %>"><%= publisher %></a><% } else { %><%= publisher %><% } %> 发布</small><% } %></p></div>
           <div class="reaction-group" aria-label="视频评价">
-            <% if (user) { %>
+            <% if (withdrawn) { %>
+              <span class="reaction-button reaction-button--static">认同 <strong><%= video.upvoteCount %></strong></span><span class="reaction-button reaction-button--static">反对 <strong><%= video.downvoteCount %></strong></span>
+            <% } else if (user) { %>
               <form action="/videos/<%= videoId %>/vote" method="post" data-vote-form data-vote-kind="up"><input type="hidden" name="_csrf" value="<%= safeCsrfToken %>"><input type="hidden" name="value" value="<%= video.viewerVote === 1 ? 0 : 1 %>"><button type="submit" class="reaction-button<% if (video.viewerVote === 1) { %> is-active<% } %>">认同 <strong data-upvotes><%= video.upvoteCount %></strong></button></form>
               <form action="/videos/<%= videoId %>/vote" method="post" data-vote-form data-vote-kind="down"><input type="hidden" name="_csrf" value="<%= safeCsrfToken %>"><input type="hidden" name="value" value="<%= video.viewerVote === -1 ? 0 : -1 %>"><button type="submit" class="reaction-button<% if (video.viewerVote === -1) { %> is-active is-negative<% } %>">反对 <strong data-downvotes><%= video.downvoteCount %></strong></button></form>
             <% } else { %><a class="reaction-button" href="/login?next=<%= encodeURIComponent('/videos/' + videoId) %>">认同 <strong><%= video.upvoteCount %></strong></a><a class="reaction-button" href="/login?next=<%= encodeURIComponent('/videos/' + videoId) %>">反对 <strong><%= video.downvoteCount %></strong></a><% } %>
@@ -74,11 +83,13 @@
         <summary><span><strong>关于作品</strong><small><%= description ? plainPreview(description) : '创作者没有留下更多说明' %></small></span><span>展开详情</span></summary>
         <div class="compact-about__content"><div><p><%= description || '创作者没有留下更多说明。' %></p><dl><div><dt>格式</dt><dd><%= formatLabel %></dd></div><% if (video.width) { %><div><dt>尺寸</dt><dd><%= video.width %>×<%= video.height %></dd></div><% } %><div><dt>许可</dt><dd><%= license.code %></dd></div></dl></div><aside><strong><% if (license.cc0) { %>公共领域工具 · <% } %><%= license.name %></strong><p><%= license.summary %></p><a href="<%= license.url %>" target="_blank" rel="license noopener">查看官方许可文本 ↗</a></aside></div>
       </details>
+      <% } %>
 
-      <% if (ready) { %>
+      <% if (ready || deleted) { %>
       <section class="thread-section" aria-labelledby="discussion-title">
-        <header class="thread-section__header"><div><p class="eyebrow"><span></span> 围绕作品</p><h2 id="discussion-title">讨论</h2></div><p><strong><%= discussionCount %></strong> 条讨论与回复</p></header>
+        <header class="thread-section__header"><div><p class="eyebrow"><span></span> <%= deleted ? '只读存档' : '围绕作品' %></p><h2 id="discussion-title"><%= deleted ? '已有讨论' : '讨论' %></h2></div><p><strong><%= discussionCount %></strong> 条讨论与回复</p></header>
 
+        <% if (!deleted && !withdrawn) { %>
         <details class="topic-composer"<% if (errorMessage || discussionCount === 0) { %> open<% } %>>
           <summary><span><strong><%= user ? '发起一个讨论' : '登录后参与讨论' %></strong><small><%= user ? '添加标题，让其他人先了解你想谈什么' : '观看始终开放，发言需要稳定账号' %></small></span><span aria-hidden="true">＋</span></summary>
           <% if (errorMessage) { %><div class="alert alert--error alert--compact" role="alert"><p><%= errorMessage %></p></div><% } %>
@@ -86,11 +97,12 @@
             <%- include('partials/discussion-composer', { videoId: videoId, safeCsrfToken: safeCsrfToken, parentId: null, composerId: 'topic-composer', replyTo: '' }) %>
           <% } else { %><div class="discussion-auth-gate"><p>账号不要求邮箱或真实姓名，用来保持讨论身份和投票的一致性。</p><a class="button button--primary" href="/login?next=<%= encodeURIComponent('/videos/' + videoId) %>">登录后参与</a></div><% } %>
         </details>
+        <% } %>
 
-        <div class="thread-toolbar"><strong><%= safeTree.length %> 个主题</strong><span>默认折叠 · 按发布时间排列</span></div>
+        <div class="thread-toolbar"><strong><%= safeTree.length %> 个主题</strong><span><%= deleted ? '只读存档 · 不再接受新讨论与回复' : (withdrawn ? '稿件已撤回 · 停止新讨论与回复' : '默认折叠 · 按发布时间排列') %></span></div>
         <div class="thread-list" id="discussion-list">
-          <% if (!safeTree.length) { %><div class="discussion-empty"><h3>还没有讨论</h3><p>可以从一个画面、一段声音，或一个没有解决的问题开始。</p></div><% } %>
-          <% safeTree.forEach(function(node) { %><%- include('partials/discussion-node', { node: node, depth: 0, videoId: videoId, user: user, safeCsrfToken: safeCsrfToken, discussionDate: discussionDate, plainPreview: plainPreview }) %><% }); %>
+          <% if (!safeTree.length) { %><div class="discussion-empty"><h3><%= deleted ? '没有可保留的讨论' : '还没有讨论' %></h3><p><%= deleted ? '该作品删除前尚无讨论内容。' : '可以从一个画面、一段声音，或一个没有解决的问题开始。' %></p></div><% } %>
+          <% safeTree.forEach(function(node) { %><%- include('partials/discussion-node', { node: node, depth: 0, videoId: videoId, user: deleted ? null : user, readOnly: deleted || withdrawn, safeCsrfToken: safeCsrfToken, discussionDate: discussionDate, plainPreview: plainPreview }) %><% }); %>
         </div>
       </section>
       <% } %>

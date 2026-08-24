@@ -1,0 +1,77 @@
+<%
+  const accountNotifications = typeof notifications !== 'undefined' && Array.isArray(notifications) ? notifications : [];
+  const notificationsCsrf = typeof csrfToken === 'string' ? csrfToken : '';
+  const notificationsPagination = typeof pagination !== 'undefined' && pagination && typeof pagination === 'object' ? pagination : {};
+  const notificationsPage = Math.max(1, Number(notificationsPagination.page ?? notificationsPagination.currentPage ?? 1) || 1);
+  const notificationsPages = Math.max(1, Number(notificationsPagination.totalPages ?? notificationsPagination.pages ?? 1) || 1);
+  const notificationsTotal = Math.max(0, Number(notificationsPagination.total ?? notificationsPagination.totalItems ?? accountNotifications.length) || 0);
+  const notificationsUnreadRaw = typeof notificationUnreadCount !== 'undefined'
+    ? notificationUnreadCount
+    : (typeof unreadNotificationCount !== 'undefined' ? unreadNotificationCount : accountNotifications.filter(function(item) { return !(item.readAt || item.read_at || item.isRead || item.is_read); }).length);
+  const notificationsUnread = Math.max(0, Number(notificationsUnreadRaw) || 0);
+  const notificationDate = function(value) {
+    const date = value ? new Date(value) : null;
+    return date && !Number.isNaN(date.getTime())
+      ? new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date)
+      : '';
+  };
+  const notificationType = function(item) {
+    const type = item.type || item.kind || 'system';
+    if (['reply', 'discussion_reply'].includes(type)) return { key: 'reply', label: '收到回复', icon: '↳' };
+    if (['video_upvote', 'upvote', 'video_vote_up'].includes(type)) return { key: 'upvote', label: '稿件获得认同', icon: '↑' };
+    if (['video_downvote', 'downvote', 'video_vote_down'].includes(type)) return { key: 'downvote', label: '稿件获得反对', icon: '↓' };
+    return { key: 'system', label: '系统通知', icon: '◇' };
+  };
+%>
+<%- include('partials/head', { pageTitle: '通知｜同见', pageDescription: '查看你在同见收到的回复、稿件反馈和系统消息。' }) %>
+<body class="page page--account">
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  <%- include('partials/header', { currentPath: '/account/notifications' }) %>
+  <div class="app-shell shell">
+    <%- include('partials/sidebar', { currentPath: '/account/notifications', categoryTree: typeof categoryTree !== 'undefined' ? categoryTree : [] }) %>
+    <main id="main-content" class="account-main" tabindex="-1">
+      <header class="account-heading"><div><p class="eyebrow"><span></span> 个人账号</p><h1>通知</h1><p>回复、稿件反馈与平台消息会按时间集中在这里。</p></div><% if (notificationsUnread > 0) { %><form action="/account/notifications/read-all" method="post"><input type="hidden" name="_csrf" value="<%= notificationsCsrf %>"><button class="button button--quiet" type="submit">全部标为已读</button></form><% } %></header>
+
+      <div class="account-layout">
+        <%- include('partials/account-navigation', { currentPath: '/account/notifications' }) %>
+        <div class="account-content">
+          <%- include('partials/account-feedback') %>
+          <div class="account-list-summary"><p><strong data-notification-count-text><%= notificationsUnread %></strong> 条未读 · 共 <%= notificationsTotal %> 条</p><a href="/account/settings#notification-settings-title">调整通知偏好</a></div>
+
+          <% if (!accountNotifications.length) { %>
+            <section class="account-empty"><span aria-hidden="true">◇</span><h2>还没有通知</h2><p>收到回复或稿件反馈时，消息会出现在这里。</p></section>
+          <% } else { %>
+            <ol class="notification-list">
+              <% accountNotifications.forEach(function(item) {
+                const type = notificationType(item);
+                const read = Boolean(item.readAt || item.read_at || item.isRead || item.is_read);
+                const count = Math.max(1, Number(item.count || item.eventCount || item.event_count || 1) || 1);
+                const title = item.title || type.label;
+                const body = item.body || item.message || item.summary || (count > 1 ? '共有 ' + count + ' 条同类反馈。' : '');
+                const targetUrl = item.url || item.targetUrl || item.target_url || item.link || '';
+              %>
+                <li class="notification-item notification-item--<%= type.key %><% if (!read) { %> is-unread<% } %>" data-notification-id="<%= item.id %>">
+                  <span class="notification-item__icon" aria-hidden="true"><%= type.icon %></span>
+                  <div class="notification-item__copy">
+                    <div><span><%= type.label %><% if (count > 1) { %> · <%= count %> 条<% } %></span><% if (!read) { %><b>未读</b><% } %></div>
+                    <h2><% if (targetUrl) { %><a href="<%= targetUrl %>"><%= title %></a><% } else { %><%= title %><% } %></h2>
+                    <% if (body) { %><p><%= body %></p><% } %>
+                    <% if (item.createdAt || item.created_at) { %><time datetime="<%= item.createdAt || item.created_at %>"><%= notificationDate(item.createdAt || item.created_at) %></time><% } %>
+                  </div>
+                  <div class="notification-item__actions">
+                    <% if (targetUrl) { %><a href="<%= targetUrl %>">查看</a><% } %>
+                    <% if (!read) { %><form action="/account/notifications/<%= item.id %>/read" method="post"><input type="hidden" name="_csrf" value="<%= notificationsCsrf %>"><button type="submit">标为已读</button></form><% } %>
+                  </div>
+                </li>
+              <% }); %>
+            </ol>
+          <% } %>
+
+          <% if (notificationsPages > 1) { %><nav class="account-pagination" aria-label="通知分页"><% if (notificationsPage > 1) { %><a href="?page=<%= notificationsPage - 1 %>">← 上一页</a><% } else { %><span></span><% } %><strong>第 <%= notificationsPage %> / <%= notificationsPages %> 页</strong><% if (notificationsPage < notificationsPages) { %><a href="?page=<%= notificationsPage + 1 %>">下一页 →</a><% } else { %><span></span><% } %></nav><% } %>
+        </div>
+      </div>
+    </main>
+  </div>
+  <%- include('partials/footer') %>
+</body>
+</html>

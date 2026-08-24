@@ -1,0 +1,73 @@
+<%
+  const publicAccount = typeof profile !== 'undefined' && profile && typeof profile === 'object'
+    ? profile
+    : (typeof account !== 'undefined' && account && typeof account === 'object' ? account : {});
+  const publicVideos = typeof videos !== 'undefined' && Array.isArray(videos) ? videos : [];
+  const publicStats = typeof stats !== 'undefined' && stats && typeof stats === 'object' ? stats : {};
+  const publicUsername = publicAccount.username || '';
+  const publicDisplayName = publicAccount.displayName || publicAccount.display_name || publicUsername || '同见用户';
+  const publicBio = publicAccount.bio || '';
+  const publicAvatarUrl = publicAccount.avatarUrl || publicAccount.avatar_url
+    || ((publicAccount.hasAvatar || publicAccount.avatarStorageName || publicAccount.avatar_storage_name) && publicUsername
+      ? '/users/' + encodeURIComponent(publicUsername) + '/avatar?v=' + encodeURIComponent(publicAccount.avatarStorageName || publicAccount.avatar_storage_name || publicAccount.updatedAt || publicAccount.updated_at || '1')
+      : '');
+  const publicJoined = publicAccount.createdAt || publicAccount.created_at;
+  const publicJoinedDate = publicJoined && !Number.isNaN(new Date(publicJoined).getTime())
+    ? new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long' }).format(new Date(publicJoined))
+    : '';
+  const publicVideoTotal = Number(publicStats.videoCount ?? publicStats.video_count ?? publicVideos.length) || 0;
+  const publicDiscussionTotal = Number(publicStats.discussionCount ?? publicStats.discussion_count ?? 0) || 0;
+  const publicUpvotes = Number(publicStats.receivedUpvoteCount ?? publicStats.received_upvote_count ?? 0) || 0;
+  const publicPagination = typeof pagination !== 'undefined' && pagination && typeof pagination === 'object' ? pagination : {};
+  const publicPage = Math.max(1, Number(publicPagination.page ?? publicPagination.currentPage ?? 1) || 1);
+  const publicPages = Math.max(1, Number(publicPagination.totalPages ?? publicPagination.pages ?? 1) || 1);
+  const signedInUser = typeof currentUser !== 'undefined' && currentUser ? currentUser : null;
+  const isProfileOwner = Boolean(signedInUser && publicUsername && String(signedInUser.username).toLowerCase() === String(publicUsername).toLowerCase());
+  const shortDate = function(value) {
+    const date = value ? new Date(value) : null;
+    return date && !Number.isNaN(date.getTime())
+      ? new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'short', day: 'numeric' }).format(date)
+      : '';
+  };
+%>
+<%- include('partials/head', { pageTitle: publicDisplayName + '｜同见', pageDescription: publicBio || ('查看 ' + publicDisplayName + ' 在同见发布的开放影像。') }) %>
+<body class="page page--public-profile">
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  <%- include('partials/header', { currentPath: '' }) %>
+  <div class="app-shell shell">
+    <%- include('partials/sidebar', { currentPath: '', categoryTree: typeof categoryTree !== 'undefined' ? categoryTree : [] }) %>
+    <main id="main-content" class="public-profile-main" tabindex="-1">
+      <a class="detail-back" href="/">← 返回视频目录</a>
+      <header class="public-profile-hero">
+        <span class="public-profile-avatar" aria-hidden="true"><% if (publicAvatarUrl) { %><img src="<%= publicAvatarUrl %>" alt=""><% } else { %><%= Array.from(String(publicDisplayName))[0] || '用' %><% } %></span>
+        <div class="public-profile-hero__copy"><p class="eyebrow"><span></span> 同见创作者</p><h1><%= publicDisplayName %></h1><p class="public-profile-handle">@<%= publicUsername %><% if (publicJoinedDate) { %> · <%= publicJoinedDate %> 加入<% } %></p><p class="public-profile-bio"><%= publicBio || '这位创作者还没有填写个人简介。' %></p></div>
+        <% if (isProfileOwner) { %><a class="button button--quiet" href="/account/profile">编辑个人信息</a><% } %>
+      </header>
+      <dl class="public-profile-stats"><div><dt>公开稿件</dt><dd><%= publicVideoTotal %></dd></div><div><dt>公开讨论</dt><dd><%= publicDiscussionTotal %></dd></div><div><dt>稿件获得认同</dt><dd><%= publicUpvotes %></dd></div></dl>
+
+      <section class="public-profile-works" aria-labelledby="profile-works-title">
+        <header><div><p class="eyebrow"><span></span> 开放影像</p><h2 id="profile-works-title">公开稿件</h2></div><span><%= publicVideoTotal %> 段视频</span></header>
+        <% if (!publicVideos.length) { %>
+          <div class="account-empty"><span aria-hidden="true">▷</span><h3>还没有公开稿件</h3><p>已撤回、私密或未通过验证的作品不会显示在这里。</p></div>
+        <% } else { %>
+          <div class="catalog-grid public-profile-grid">
+            <% publicVideos.forEach(function(video) { const coverName = video.coverStorageName || video.cover_storage_name; const tags = Array.isArray(video.tags) ? video.tags : []; %>
+              <article class="catalog-card">
+                <a class="catalog-card__cover" href="/videos/<%= video.id %>" aria-label="观看《<%= video.title %>》"><% if (coverName) { %><img src="/videos/<%= video.id %>/cover" alt="" loading="lazy"><% } else { %><span class="catalog-card__placeholder" aria-hidden="true"><i></i><i></i><b>同见</b></span><% } %><span class="catalog-card__play" aria-hidden="true">▶</span></a>
+                <div class="catalog-card__body">
+                  <div class="catalog-card__context"><% if (video.categoryName || video.category_name) { %><span><%= video.categoryName || video.category_name %></span><% } else { %><span>未分类</span><% } %><% if (video.createdAt || video.created_at) { %><time datetime="<%= video.createdAt || video.created_at %>"><%= shortDate(video.createdAt || video.created_at) %></time><% } %></div>
+                  <h2><a href="/videos/<%= video.id %>"><%= video.title %></a></h2><p class="catalog-card__creator"><%= video.creator %></p>
+                  <% if (tags.length) { %><div class="tag-row"><% tags.slice(0, 4).forEach(function(tag) { %><a href="/tags/<%= tag.slug %>">#<%= tag.name %></a><% }); %></div><% } %>
+                  <div class="catalog-card__signals"><span>认同 <strong><%= Number(video.upvoteCount ?? video.upvote_count ?? 0) || 0 %></strong></span><span>反对 <strong><%= Number(video.downvoteCount ?? video.downvote_count ?? 0) || 0 %></strong></span><% if (video.licenseLabel || video.licenseCode || video.license_code) { %><span><%= video.licenseLabel || video.licenseCode || video.license_code %></span><% } %></div>
+                </div>
+              </article>
+            <% }); %>
+          </div>
+        <% } %>
+        <% if (publicPages > 1) { %><nav class="account-pagination" aria-label="公开稿件分页"><% if (publicPage > 1) { %><a href="?page=<%= publicPage - 1 %>">← 上一页</a><% } else { %><span></span><% } %><strong>第 <%= publicPage %> / <%= publicPages %> 页</strong><% if (publicPage < publicPages) { %><a href="?page=<%= publicPage + 1 %>">下一页 →</a><% } else { %><span></span><% } %></nav><% } %>
+      </section>
+    </main>
+  </div>
+  <%- include('partials/footer') %>
+</body>
+</html>

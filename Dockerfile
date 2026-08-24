@@ -35,7 +35,9 @@ HEALTHCHECK NONE
 
 CMD ["node", "src/validator-worker.js"]
 
-FROM source AS app
+FROM validator-runtime AS app
+
+COPY --from=source --chown=node:node /app /app
 
 USER node
 

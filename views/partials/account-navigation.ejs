@@ -1,0 +1,15 @@
+<%
+  const accountNavPath = typeof currentPath === 'string' ? currentPath : '/account/profile';
+  const accountNavUnreadRaw = typeof notificationUnreadCount !== 'undefined'
+    ? notificationUnreadCount
+    : (typeof unreadNotificationCount !== 'undefined' ? unreadNotificationCount : 0);
+  const accountNavUnread = Math.max(0, Number(accountNavUnreadRaw) || 0);
+%>
+<nav class="account-section-nav" aria-label="个人账号">
+  <p>个人账号</p>
+  <a href="/account/profile"<% if (accountNavPath.startsWith('/account/profile')) { %> aria-current="page"<% } %>><span aria-hidden="true">○</span><span><strong>个人信息</strong><small>公开资料与头像</small></span></a>
+  <a href="/account/videos"<% if (accountNavPath.startsWith('/account/videos')) { %> aria-current="page"<% } %>><span aria-hidden="true">▷</span><span><strong>我的稿件</strong><small>撤回、重新发布与删除</small></span></a>
+  <a href="/account/settings"<% if (accountNavPath.startsWith('/account/settings')) { %> aria-current="page"<% } %>><span aria-hidden="true">⌘</span><span><strong>设置</strong><small>密码、通知偏好与账号</small></span></a>
+  <a href="/account/discussions"<% if (accountNavPath.startsWith('/account/discussions')) { %> aria-current="page"<% } %>><span aria-hidden="true">≡</span><span><strong>我的讨论</strong><small>修改或删除过往发言</small></span></a>
+  <a href="/account/notifications"<% if (accountNavPath.startsWith('/account/notifications')) { %> aria-current="page"<% } %>><span aria-hidden="true">◇</span><span><strong>通知</strong><small>回复、稿件反馈与系统消息</small></span><b data-notification-count<% if (!accountNavUnread) { %> hidden<% } %>><%= accountNavUnread > 99 ? '99+' : accountNavUnread %></b></a>
+</nav>

@@ -1,25 +1,41 @@
 <%
-  const isReplyComposer = Number.isSafeInteger(Number(parentId)) && Number(parentId) > 0;
+  const isEditComposer = typeof composerMode === 'string' && composerMode === 'edit';
+  const composerParentId = typeof parentId !== 'undefined' ? parentId : null;
+  const isReplyComposer = !isEditComposer && Number.isSafeInteger(Number(composerParentId)) && Number(composerParentId) > 0;
+  const isReplyContent = isEditComposer
+    ? (typeof isReply !== 'undefined' && Boolean(isReply))
+    : isReplyComposer;
   const composerKey = typeof composerId === 'string' && composerId
     ? composerId
-    : (isReplyComposer ? 'reply-' + parentId : 'topic');
+    : (isEditComposer ? 'edit-discussion' : (isReplyComposer ? 'reply-' + composerParentId : 'topic'));
   const titleInputId = composerKey + '-title';
   const replyTarget = typeof replyTo === 'string' ? replyTo : '';
+  const composerAction = typeof formAction === 'string' && formAction
+    ? formAction
+    : '/videos/' + videoId + '/discussions';
+  const initialTitle = typeof titleValue === 'string' ? titleValue : '';
+  const initialBody = typeof bodyValue === 'string' ? bodyValue : '';
+  const composerReturnTo = typeof returnTo === 'string' && returnTo.startsWith('/') ? returnTo : '';
+  const titleRequired = !isReplyContent;
+  const submitCopy = typeof submitLabel === 'string' && submitLabel
+    ? submitLabel
+    : (isEditComposer ? '保存修改' : (isReplyComposer ? '发布回复' : '发布讨论'));
 %>
-<form class="discussion-form<% if (isReplyComposer) { %> discussion-form--reply<% } %>" action="/videos/<%= videoId %>/discussions" method="post" data-discussion-form>
+<form class="discussion-form<% if (isReplyContent) { %> discussion-form--reply<% } %><% if (isEditComposer) { %> discussion-form--edit<% } %>" action="<%= composerAction %>" method="post" data-discussion-form data-submit-pending-label="<%= isEditComposer ? '正在保存修改……' : '正在发布回应……' %>" data-submit-success-label="<%= isEditComposer ? '修改已保存，正在刷新……' : '发布成功，正在刷新讨论……' %>">
   <input type="hidden" name="_csrf" value="<%= safeCsrfToken %>">
-  <% if (isReplyComposer) { %><input type="hidden" name="parentId" value="<%= parentId %>"><% } %>
+  <% if (composerReturnTo) { %><input type="hidden" name="returnTo" value="<%= composerReturnTo %>"><% } %>
+  <% if (isReplyComposer) { %><input type="hidden" name="parentId" value="<%= composerParentId %>"><% } %>
 
   <label class="field discussion-form__title" for="<%= titleInputId %>">
-    <span class="field__label"><%= isReplyComposer ? '回复标题' : '讨论标题' %> <% if (isReplyComposer) { %><small>选填</small><% } else { %><i>必填</i><% } %></span>
-    <input id="<%= titleInputId %>" type="text" name="title" maxlength="120"<% if (!isReplyComposer) { %> required<% } %> placeholder="<%= isReplyComposer ? '可用一句话突出回复观点' : '用一句话说明讨论主题' %>">
+    <span class="field__label"><%= isReplyContent ? '回复标题' : '讨论标题' %> <% if (isReplyContent) { %><small>选填</small><% } else { %><i>必填</i><% } %></span>
+    <input id="<%= titleInputId %>" type="text" name="title" value="<%= initialTitle %>" maxlength="120"<% if (titleRequired) { %> required<% } %> placeholder="<%= isReplyContent ? '可用一句话突出回复观点' : '用一句话说明讨论主题' %>">
   </label>
 
   <div class="editor editor--compact" data-markdown-editor data-preview-endpoint="/api/markdown-preview">
     <section class="editor__pane">
-      <div class="editor__bar"><strong><%= isReplyComposer ? '回复正文' : '正文' %></strong><span>Markdown / LaTeX</span></div>
+      <div class="editor__bar"><strong><%= isReplyContent ? '回复正文' : '正文' %></strong><span>Markdown / LaTeX</span></div>
       <%- include('math-editor', { formulaEditorId: composerKey + '-formula-dialog' }) %>
-      <textarea name="body" rows="<%= isReplyComposer ? 5 : 7 %>" maxlength="5000" required placeholder="<%= isReplyComposer ? '回复 ' + replyTarget + '；补充依据、提出问题或继续推导……' : '展开你的问题、观点或补充资料……' %>" data-markdown-input></textarea>
+      <textarea name="body" rows="<%= isReplyContent ? 5 : 7 %>" maxlength="5000" required placeholder="<%= isReplyContent ? '回复 ' + replyTarget + '；补充依据、提出问题或继续推导……' : '展开你的问题、观点或补充资料……' %>" data-markdown-input><%= initialBody %></textarea>
     </section>
     <section class="editor__pane editor__preview-pane">
       <div class="editor__bar"><strong>预览</strong><span data-preview-status>等待输入</span></div>
@@ -28,8 +44,8 @@
   </div>
 
   <div class="composer-submit">
-    <p><%= isReplyComposer ? '回复会显示在当前内容下方；标题留空时只显示正文。' : '发布后默认折叠显示，读者可先看标题再决定是否展开。' %></p>
-    <button class="button <%= isReplyComposer ? 'button--quiet' : 'button--primary' %>" type="submit" data-discussion-submit><%= isReplyComposer ? '发布回复' : '发布讨论' %></button>
+    <p><%= isEditComposer ? '修改后会公开标注累计修改次数和最后修改时间。' : (isReplyComposer ? '回复会显示在当前内容下方；标题留空时只显示正文。' : '发布后默认折叠显示，读者可先看标题再决定是否展开。') %></p>
+    <button class="button <%= isReplyContent || isEditComposer ? 'button--quiet' : 'button--primary' %>" type="submit" data-discussion-submit><%= submitCopy %></button>
   </div>
   <p class="composer-status" data-discussion-status aria-live="polite"></p>
 </form>

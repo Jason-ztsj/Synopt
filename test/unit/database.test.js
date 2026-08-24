@@ -39,6 +39,8 @@ function video(id, createdAt) {
     userId: null,
     accountUsername: null,
     accountDisplayName: null,
+    accountAvatarStorageName: null,
+    accountAvatarMediaType: null,
     categoryId: null,
     categorySlug: null,
     categoryName: null,
@@ -50,7 +52,11 @@ function video(id, createdAt) {
     tags: [],
     upvoteCount: 0,
     downvoteCount: 0,
+    discussionCount: 0,
     viewerVote: 0,
+    archivePublic: false,
+    withdrawnAt: null,
+    deletedAt: null,
     createdAt
   };
 }
@@ -254,7 +260,7 @@ test('schema v0 无账号数据库迁移到最新版，并保留视频、讨论�
 
     database = openDatabase(databasePath);
     assert.equal(database.getSchemaVersion(), CURRENT_SCHEMA_VERSION);
-    assert.equal(CURRENT_SCHEMA_VERSION, 3);
+    assert.equal(CURRENT_SCHEMA_VERSION, 4);
     assert.equal(database.raw.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
     assert.deepEqual(database.raw.prepare('PRAGMA foreign_key_check').all(), []);
     const migratedVideo = database.getVideo('legacy-video');
@@ -347,7 +353,7 @@ test('schema v1 带账号数据迁移到最新版，完整保留账号、会话�
     v1.close();
 
     database = openDatabase(databasePath);
-    assert.equal(database.getSchemaVersion(), 3);
+    assert.equal(database.getSchemaVersion(), 4);
     assert.equal(database.raw.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
     assert.deepEqual(database.raw.prepare('PRAGMA foreign_key_check').all(), []);
 
@@ -439,7 +445,8 @@ test('验证状态机按时间领取 pending，并正确完成、警告、拒绝
     assert.equal(database.completeVideoValidation(
       readyClaim.id,
       readyResult,
-      '2026-08-22T06:01:00.000Z'
+      '2026-08-22T06:01:00.000Z',
+      readyClaim.validationStartedAt
     ), 1);
     const ready = database.getVideo(readyClaim.id);
     assert.equal(ready.validationStatus, 'ready');
@@ -463,7 +470,7 @@ test('验证状态机按时间领取 pending，并正确完成、警告、拒绝
       frameRate: 24,
       warningCount: 2,
       summary: { warnings: ['recoverable-frame-error'] }
-    }, '2026-08-22T06:03:00.000Z'), 1);
+    }, '2026-08-22T06:03:00.000Z', warningClaim.validationStartedAt), 1);
     const warning = database.getVideo(warningClaim.id);
     assert.equal(warning.validationStatus, 'ready_with_warnings');
     assert.equal(warning.validationWarningCount, 2);
@@ -473,13 +480,15 @@ test('验证状态机按时间领取 pending，并正确完成、警告、拒绝
     assert.equal(database.rejectVideoValidation(
       rejectedClaim.id,
       { code: 'UNSUPPORTED_CODEC' },
-      '2026-08-22T06:05:00.000Z'
+      '2026-08-22T06:05:00.000Z',
+      rejectedClaim.validationStartedAt
     ), 1);
     assert.equal(database.getVideo(rejectedClaim.id).validationStatus, 'rejected');
     assert.equal(database.rejectVideoValidation(
       rejectedClaim.id,
       { code: 'SECOND_REJECTION' },
-      '2026-08-22T06:06:00.000Z'
+      '2026-08-22T06:06:00.000Z',
+      rejectedClaim.validationStartedAt
     ), 0);
 
     const failedClaim = database.claimNextVideoForValidation('2026-08-22T06:06:00.000Z');
@@ -487,7 +496,8 @@ test('验证状态机按时间领取 pending，并正确完成、警告、拒绝
     assert.equal(database.failVideoValidation(
       failedClaim.id,
       { code: 'VALIDATOR_TIMEOUT', retryable: true },
-      '2026-08-22T06:07:00.000Z'
+      '2026-08-22T06:07:00.000Z',
+      failedClaim.validationStartedAt
     ), 1);
     assert.equal(database.getVideo(failedClaim.id).validationStatus, 'validation_failed');
     assert.equal(database.retryFailedValidations(), 1);
@@ -498,7 +508,8 @@ test('验证状态机按时间领取 pending，并正确完成、警告、拒绝
     assert.equal(database.failVideoValidation(
       retriedClaim.id,
       { code: 'VALIDATOR_TIMEOUT', retryable: false },
-      '2026-08-22T06:09:00.000Z'
+      '2026-08-22T06:09:00.000Z',
+      retriedClaim.validationStartedAt
     ), 1);
 
     const staleClaim = database.claimNextVideoForValidation('2026-08-22T06:10:00.000Z');
@@ -506,7 +517,45 @@ test('验证状态机按时间领取 pending，并正确完成、警告、拒绝
     assert.equal(database.resetStaleValidations('2026-08-22T06:11:00.000Z'), 1);
     assert.equal(database.getVideo(staleClaim.id).validationStatus, 'pending');
     assert.equal(database.getVideo(staleClaim.id).validationStartedAt, null);
-    assert.equal(database.claimNextVideoForValidation('2026-08-22T06:12:00.000Z').id, 'finish-stale');
+    const reclaimed = database.claimNextVideoForValidation('2026-08-22T06:12:00.000Z');
+    assert.equal(reclaimed.id, 'finish-stale');
+    assert.equal(database.rejectVideoValidation(
+      staleClaim.id,
+      { code: 'STALE_WORKER_REJECTION' },
+      '2026-08-22T06:12:01.000Z',
+      staleClaim.validationStartedAt
+    ), 0, '旧 worker 不能提交已被重领任务的拒绝结果');
+    assert.equal(database.failVideoValidation(
+      staleClaim.id,
+      { code: 'STALE_WORKER_FAILURE' },
+      '2026-08-22T06:12:02.000Z',
+      staleClaim.validationStartedAt
+    ), 0);
+    assert.equal(database.completeVideoValidation(
+      staleClaim.id,
+      readyResult,
+      '2026-08-22T06:12:03.000Z',
+      staleClaim.validationStartedAt
+    ), 0);
+    assert.equal(database.setVideoCover(staleClaim.id, {
+      storageName: 'stale-worker-cover.jpg', mediaType: 'image/jpeg', source: 'generated'
+    }, staleClaim.validationStartedAt), 0);
+    assert.equal(database.getVideo(staleClaim.id).validationStartedAt, reclaimed.validationStartedAt);
+    assert.equal(database.renewVideoValidationLease(
+      reclaimed.id,
+      reclaimed.validationStartedAt,
+      '2026-08-22T06:13:00.000Z'
+    ), 1);
+    assert.equal(database.renewVideoValidationLease(
+      reclaimed.id,
+      reclaimed.validationStartedAt,
+      '2026-08-22T06:14:00.000Z'
+    ), 0, '续租后旧租约版本立即失效');
+    assert.equal(
+      database.listFileDeletionTargets().some((task) => task.storageName === 'finish-stale.mp4'),
+      false,
+      '旧 worker 的拒绝结果不得排队删除新 worker 正在验证的文件'
+    );
 
     assert.deepEqual(
       database.listVideos().map((entry) => entry.id),
@@ -523,6 +572,58 @@ test('验证状态机按时间领取 pending，并正确完成、警告、拒绝
       ]
     );
     assert.deepEqual(database.raw.prepare('PRAGMA foreign_key_check').all(), []);
+  } finally {
+    database?.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('媒体拒绝状态、封面解绑与持久删除任务在同一事务提交或回滚', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'tongjian-rejection-queue-test-'));
+  let database;
+  try {
+    database = openDatabase(path.join(directory, 'rejection.sqlite'));
+    database.insertVideo({
+      ...video('atomic-rejected', '2026-08-22T08:00:00.000Z'),
+      validationStatus: 'pending',
+      coverStorageName: 'atomic-rejected-cover.webp',
+      coverMediaType: 'image/webp',
+      coverSource: 'uploaded'
+    });
+    const rejectionClaim = database.claimNextVideoForValidation('2026-08-22T08:01:00.000Z');
+    assert.equal(rejectionClaim.id, 'atomic-rejected');
+    database.raw.exec(`
+      CREATE TRIGGER abort_rejection_file_queue
+      BEFORE INSERT ON file_deletion_queue
+      BEGIN
+        SELECT RAISE(ABORT, 'queue unavailable');
+      END;
+    `);
+    assert.throws(() => database.rejectVideoValidation(
+      'atomic-rejected',
+      { code: 'INVALID_STRUCTURE' },
+      '2026-08-22T08:02:00.000Z',
+      rejectionClaim.validationStartedAt
+    ), /queue unavailable/);
+    let stored = database.getVideo('atomic-rejected');
+    assert.equal(stored.validationStatus, 'validating');
+    assert.equal(stored.coverStorageName, 'atomic-rejected-cover.webp');
+    assert.deepEqual(database.listFileDeletionTargets(), []);
+
+    database.raw.exec('DROP TRIGGER abort_rejection_file_queue');
+    assert.equal(database.rejectVideoValidation(
+      'atomic-rejected',
+      { code: 'INVALID_STRUCTURE' },
+      '2026-08-22T08:03:00.000Z',
+      rejectionClaim.validationStartedAt
+    ), 1);
+    stored = database.getVideo('atomic-rejected');
+    assert.equal(stored.validationStatus, 'rejected');
+    assert.equal(stored.coverStorageName, null);
+    assert.deepEqual(database.listFileDeletionTargets(), [
+      { kind: 'video', storageName: 'atomic-rejected.mp4' },
+      { kind: 'cover', storageName: 'atomic-rejected-cover.webp' }
+    ]);
   } finally {
     database?.close();
     await rm(directory, { recursive: true, force: true });
@@ -566,6 +667,895 @@ test('分类、标签、树状讨论、搜索与双向投票保持可查询和�
     assert.equal(database.setVideoVote(stored.id, user.id, 0, '2026-08-23T04:02:00.000Z').downvoteCount, 0);
     assert.equal(database.setDiscussionVote(topic.id, user.id, 1, '2026-08-23T04:03:00.000Z').viewerVote, 1);
     assert.deepEqual(database.raw.prepare('PRAGMA foreign_key_check').all(), []);
+  } finally {
+    database?.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('公开个人页的讨论和获票统计不泄露私有、撤回、隐藏或未验证稿件', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'tongjian-public-profile-count-test-'));
+  let database;
+  try {
+    database = openDatabase(path.join(directory, 'profile-count.sqlite'));
+    const owner = database.createUser({
+      id: 'profile-count-owner', username: 'profile_count_owner', displayName: '公开作者',
+      passwordHash: 'hash', createdAt: '2026-08-23T07:00:00.000Z'
+    });
+    const voter = database.createUser({
+      id: 'profile-count-voter', username: 'profile_count_voter', displayName: '统计投票者',
+      passwordHash: 'hash', createdAt: '2026-08-23T07:01:00.000Z'
+    });
+    const cases = [
+      ['profile-public', {}],
+      ['profile-private', { visibility: 'private' }],
+      ['profile-withdrawn', {}],
+      ['profile-hidden', { moderationStatus: 'hidden' }],
+      ['profile-pending', { validationStatus: 'pending' }]
+    ];
+    for (const [id, overrides] of cases) {
+      database.insertVideo({
+        ...video(id, `2026-08-23T07:0${cases.findIndex(([candidate]) => candidate === id) + 2}:00.000Z`),
+        userId: owner.id,
+        ...overrides
+      });
+      database.insertDiscussion({
+        videoId: id,
+        userId: owner.id,
+        nickname: owner.displayName,
+        title: `讨论 ${id}`,
+        bodyMarkdown: `正文 ${id}`,
+        createdAt: '2026-08-23T07:10:00.000Z'
+      });
+    }
+    database.withdrawVideo('profile-withdrawn', owner.id, '2026-08-23T07:11:00.000Z');
+    database.setVideoVote('profile-public', voter.id, 1, '2026-08-23T07:12:00.000Z');
+    database.setVideoVote('profile-private', voter.id, -1, '2026-08-23T07:13:00.000Z');
+    database.setVideoVote('profile-withdrawn', voter.id, 1, '2026-08-23T07:14:00.000Z');
+    database.setVideoVote('profile-hidden', voter.id, -1, '2026-08-23T07:15:00.000Z');
+    database.setVideoVote('profile-pending', voter.id, 1, '2026-08-23T07:16:00.000Z');
+
+    const profile = database.getPublicUserProfile(owner.username);
+    assert.equal(profile.videoCount, 1);
+    assert.equal(profile.discussionCount, 1);
+    assert.equal(profile.receivedUpvoteCount, 1);
+    assert.equal(profile.receivedDownvoteCount, 0);
+  } finally {
+    database?.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('账号资料、头像、稿件分页、撤回重发和永久删除保持一致', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'tongjian-account-content-test-'));
+  let database;
+  try {
+    database = openDatabase(path.join(directory, 'account.sqlite'));
+    const owner = database.createUser({
+      id: 'content-owner', username: 'content_owner', displayName: '原显示名',
+      passwordHash: 'old-password-hash', createdAt: '2026-08-23T08:00:00.000Z'
+    });
+    const updated = database.updateUserProfile(owner.id, {
+      displayName: '新显示名', bio: '开放知识贡献者', updatedAt: '2026-08-23T08:01:00.000Z'
+    });
+    assert.equal(updated.displayName, '新显示名');
+    assert.equal(updated.bio, '开放知识贡献者');
+
+    const avatar = database.updateUserAvatar(owner.id, {
+      storageName: 'avatar-content-owner.webp', mediaType: 'image/webp',
+      updatedAt: '2026-08-23T08:02:00.000Z'
+    });
+    assert.equal(avatar.previousAvatarStorageName, null);
+    assert.equal(avatar.user.avatarMediaType, 'image/webp');
+    const replacedAvatar = database.updateUserAvatar(owner.id, {
+      storageName: 'avatar-content-owner-2.png', mediaType: 'image/png',
+      updatedAt: '2026-08-23T08:03:00.000Z'
+    });
+    assert.equal(replacedAvatar.previousAvatarStorageName, 'avatar-content-owner.webp');
+    assert.deepEqual(database.listAvatarStorageNames(), ['avatar-content-owner-2.png']);
+    assert.equal(database.updateUserPassword(owner.id, 'new-password-hash', '2026-08-23T08:04:00.000Z'), 1);
+
+    database.createSession({
+      tokenHash: 'a'.repeat(64), userId: owner.id, csrfTokenHash: 'b'.repeat(64),
+      createdAt: '2026-08-23T08:05:00.000Z', expiresAt: '2026-09-23T08:05:00.000Z'
+    });
+    database.createSession({
+      tokenHash: 'c'.repeat(64), userId: owner.id, csrfTokenHash: 'd'.repeat(64),
+      createdAt: '2026-08-23T08:06:00.000Z', expiresAt: '2026-09-23T08:06:00.000Z'
+    });
+    assert.equal(database.findSessionByTokenHash('a'.repeat(64)).user.avatarStorageName, 'avatar-content-owner-2.png');
+    assert.equal(database.revokeOtherSessions(owner.id, 'a'.repeat(64)), 1);
+
+    database.insertVideo({
+      ...video('managed-a', '2026-08-23T09:00:00.000Z'), userId: owner.id,
+      categorySlug: 'science-technology', tags: [{ slug: 'managed', name: '管理' }],
+      coverStorageName: 'managed-a-cover.webp', coverMediaType: 'image/webp', coverSource: 'uploaded'
+    });
+    database.insertVideo({ ...video('managed-b', '2026-08-23T10:00:00.000Z'), userId: owner.id });
+    assert.deepEqual(database.listUserVideos(owner.id, { limit: 1 }).items.map((item) => item.id), ['managed-b']);
+    assert.equal(database.listUserVideos(owner.id, { limit: 1 }).total, 2);
+    assert.equal(database.getPublicUserProfile(owner.username).videoCount, 2);
+    assert.equal(database.listPublicUserVideos(owner.id).total, 2);
+
+    const withdrawn = database.withdrawVideo('managed-a', owner.id, '2026-08-23T11:00:00.000Z');
+    assert.equal(withdrawn.visibility, 'private');
+    assert.equal(withdrawn.archivePublic, true);
+    assert.equal(withdrawn.withdrawnAt, '2026-08-23T11:00:00.000Z');
+    assert.equal(database.listVideos().some((item) => item.id === 'managed-a'), false);
+    assert.equal(database.republishVideo('managed-a', owner.id).visibility, 'public');
+    assert.equal(database.getVideo('managed-a').withdrawnAt, null);
+
+    const discussion = database.insertDiscussion({
+      videoId: 'managed-a', userId: owner.id, nickname: owner.displayName,
+      title: '永久删除后保留', bodyMarkdown: '档案讨论', createdAt: '2026-08-23T11:10:00.000Z'
+    });
+    assert.equal(database.markVideoPermanentlyDeleted(
+      'managed-a', owner.id, '2026-08-23T11:11:00.000Z'
+    ), null, '未撤回稿件不能永久删除');
+    database.withdrawVideo('managed-a', owner.id, '2026-08-23T11:12:00.000Z');
+    const asset = database.markVideoPermanentlyDeleted(
+      'managed-a', owner.id, '2026-08-23T11:13:00.000Z'
+    );
+    assert.deepEqual(asset, {
+      videoId: 'managed-a', title: '标题 managed-a', storageName: 'managed-a.mp4',
+      coverStorageName: 'managed-a-cover.webp', validationStatus: 'ready'
+    });
+    const deleted = database.getVideo('managed-a');
+    assert.equal(deleted.deletedAt, '2026-08-23T11:13:00.000Z');
+    assert.equal(deleted.archivePublic, true, '永久删除后保留撤回前的公开档案状态');
+    assert.equal(deleted.title, '作品已删除');
+    assert.equal(deleted.userId, null);
+    assert.deepEqual(deleted.tags, []);
+    assert.equal(database.getDiscussion(discussion.id).bodyMarkdown, '档案讨论');
+    assert.equal(database.listVideoStorageNames().includes('managed-a.mp4'), false);
+    assert.equal(database.listVideosMissingCover().some((item) => item.id === 'managed-a'), false);
+
+    database.insertVideo({
+      ...video('managed-private', '2026-08-23T11:14:00.000Z'),
+      userId: owner.id,
+      visibility: 'private'
+    });
+    assert.equal(database.withdrawVideo(
+      'managed-private', owner.id, '2026-08-23T11:15:00.000Z'
+    ).archivePublic, false);
+    assert.equal(database.markVideoPermanentlyDeleted(
+      'managed-private', owner.id, '2026-08-23T11:16:00.000Z'
+    ).videoId, 'managed-private');
+    assert.equal(database.getVideo('managed-private').archivePublic, false);
+
+    database.insertVideo({
+      ...video('managed-hidden', '2026-08-23T11:17:00.000Z'),
+      userId: owner.id,
+      moderationStatus: 'hidden'
+    });
+    assert.equal(database.withdrawVideo(
+      'managed-hidden', owner.id, '2026-08-23T11:18:00.000Z'
+    ).archivePublic, false);
+    database.markVideoPermanentlyDeleted(
+      'managed-hidden', owner.id, '2026-08-23T11:19:00.000Z'
+    );
+    assert.equal(database.getVideo('managed-hidden').archivePublic, false);
+
+    database.insertVideo({
+      ...video('managed-hidden-after-withdraw', '2026-08-23T11:20:00.000Z'),
+      userId: owner.id
+    });
+    assert.equal(database.withdrawVideo(
+      'managed-hidden-after-withdraw', owner.id, '2026-08-23T11:21:00.000Z'
+    ).archivePublic, true);
+    database.raw.prepare(`
+      UPDATE videos SET moderation_status = 'hidden'
+      WHERE id = 'managed-hidden-after-withdraw'
+    `).run();
+    database.markVideoPermanentlyDeleted(
+      'managed-hidden-after-withdraw', owner.id, '2026-08-23T11:22:00.000Z'
+    );
+    assert.equal(
+      database.getVideo('managed-hidden-after-withdraw').archivePublic,
+      false,
+      '撤回后若被审核隐藏，永久删除档案也不可公开'
+    );
+
+    database.insertVideo({
+      ...video('managed-rejected-after-withdraw', '2026-08-23T11:23:00.000Z'),
+      userId: owner.id
+    });
+    assert.equal(database.withdrawVideo(
+      'managed-rejected-after-withdraw', owner.id, '2026-08-23T11:24:00.000Z'
+    ).archivePublic, true);
+    database.raw.prepare(`
+      UPDATE videos SET validation_status = 'rejected'
+      WHERE id = 'managed-rejected-after-withdraw'
+    `).run();
+    database.markVideoPermanentlyDeleted(
+      'managed-rejected-after-withdraw', owner.id, '2026-08-23T11:25:00.000Z'
+    );
+    assert.equal(
+      database.getVideo('managed-rejected-after-withdraw').archivePublic,
+      false,
+      '撤回后验证状态变为 rejected 时不得保留公开档案'
+    );
+
+    database.insertVideo({
+      ...video('managed-pending', '2026-08-23T11:26:00.000Z'),
+      userId: owner.id,
+      validationStatus: 'pending'
+    });
+    assert.equal(database.withdrawVideo(
+      'managed-pending', owner.id, '2026-08-23T11:27:00.000Z'
+    ).archivePublic, false, 'pending 稿件即使 visibility 为 public 也不能公开归档');
+    database.markVideoPermanentlyDeleted(
+      'managed-pending', owner.id, '2026-08-23T11:28:00.000Z'
+    );
+    assert.equal(database.getVideo('managed-pending').archivePublic, false);
+
+    const pendingAccount = database.createUser({
+      id: 'pending-account-owner', username: 'pending_account_owner', displayName: '待验证作者',
+      passwordHash: 'hash', createdAt: '2026-08-23T11:29:00.000Z'
+    });
+    database.insertVideo({
+      ...video('pending-account-video', '2026-08-23T11:30:00.000Z'),
+      userId: pendingAccount.id,
+      validationStatus: 'pending'
+    });
+    database.deleteAccount(pendingAccount.id, {
+      deleteVideos: true,
+      deleteDiscussions: false,
+      deletedAt: '2026-08-23T11:31:00.000Z'
+    });
+    assert.equal(
+      database.getVideo('pending-account-video').archivePublic,
+      false,
+      '注销账号直接删除 pending 稿件也不能产生公开档案'
+    );
+    assert.deepEqual(database.raw.prepare('PRAGMA foreign_key_check').all(), []);
+  } finally {
+    database?.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('文件删除队列幂等记录失败并与失去引用的资源保持同一事务', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'tongjian-file-deletion-queue-test-'));
+  let database;
+  try {
+    database = openDatabase(path.join(directory, 'queue.sqlite'));
+    const enqueued = database.enqueueFileDeletion({
+      kind: 'cover',
+      storageName: 'orphan-cover.webp',
+      createdAt: '2026-08-23T11:20:00.000Z'
+    });
+    assert.deepEqual(enqueued, {
+      id: enqueued.id,
+      kind: 'cover',
+      storageName: 'orphan-cover.webp',
+      attemptCount: 0,
+      lastError: null,
+      nextAttemptAt: '2026-08-23T11:20:00.000Z',
+      createdAt: '2026-08-23T11:20:00.000Z',
+      updatedAt: '2026-08-23T11:20:00.000Z'
+    });
+    const duplicate = database.enqueueFileDeletion({
+      kind: 'cover',
+      storageName: 'orphan-cover.webp',
+      createdAt: '2026-08-23T11:21:00.000Z'
+    });
+    assert.deepEqual(duplicate, enqueued, '重复入队不新增任务，也不重置任务状态');
+    assert.equal(database.listPendingFileDeletions().length, 1);
+    assert.throws(() => database.enqueueFileDeletion({
+      kind: 'other', storageName: 'orphan.bin', createdAt: '2026-08-23T11:22:00.000Z'
+    }), /video、cover 或 avatar/);
+    assert.throws(() => database.enqueueFileDeletion({
+      kind: 'video', storageName: '../escape.mp4', createdAt: '2026-08-23T11:22:00.000Z'
+    }), /安全的存储文件名/);
+
+    const failed = database.failFileDeletion(
+      enqueued.id,
+      new Error('x'.repeat(2500)),
+      '2026-08-23T11:23:00.000Z'
+    );
+    assert.equal(failed.attemptCount, 1);
+    assert.equal(failed.lastError.length, 2000);
+    assert.equal(failed.nextAttemptAt, '2026-08-23T11:23:05.000Z');
+    assert.equal(failed.updatedAt, '2026-08-23T11:23:00.000Z');
+    assert.equal(database.failFileDeletion(999_999, 'missing', '2026-08-23T11:24:00.000Z'), null);
+    assert.equal(database.enqueueFileDeletion({
+      kind: 'cover',
+      storageName: 'orphan-cover.webp',
+      createdAt: '2026-08-23T11:25:00.000Z'
+    }).attemptCount, 1, '重复入队不得清除失败次数');
+    assert.equal(database.completeFileDeletion(enqueued.id), 1);
+    assert.equal(database.completeFileDeletion(enqueued.id), 0);
+
+    for (let index = 0; index < 50; index += 1) {
+      const retryTask = database.enqueueFileDeletion({
+        kind: 'video',
+        storageName: `backoff-${String(index).padStart(2, '0')}.mp4`,
+        createdAt: '2026-08-23T10:00:00.000Z'
+      });
+      database.failFileDeletion(
+        retryTask.id,
+        '等待退避重试',
+        '2026-08-23T10:01:00.000Z'
+      );
+    }
+    database.enqueueFileDeletion({
+      kind: 'video',
+      storageName: 'brand-new.mp4',
+      createdAt: '2026-08-23T11:29:00.000Z'
+    });
+    const firstPage = database.listPendingFileDeletions({ limit: 50 });
+    assert.equal(firstPage.length, 50);
+    assert.equal(firstPage[0].storageName, 'brand-new.mp4');
+    assert.equal(firstPage[0].attemptCount, 0);
+    assert.equal(
+      firstPage.filter((item) => item.attemptCount > 0).length,
+      49,
+      '50 个退避失败任务不能把后入队的新任务堵在分页之外'
+    );
+    for (const task of database.listPendingFileDeletions({ limit: 100 })) {
+      database.completeFileDeletion(task.id);
+    }
+
+    const highAttemptTask = database.enqueueFileDeletion({
+      kind: 'video',
+      storageName: 'high-attempt.mp4',
+      createdAt: '2026-08-23T12:00:00.000Z'
+    });
+    let highAttemptState;
+    for (let attempt = 0; attempt < 14; attempt += 1) {
+      highAttemptState = database.failFileDeletion(
+        highAttemptTask.id,
+        '持续失败',
+        '2026-08-23T12:00:00.000Z'
+      );
+    }
+    assert.equal(highAttemptState.attemptCount, 14);
+    assert.equal(highAttemptState.nextAttemptAt, '2026-08-23T18:00:00.000Z', '退避上限为 6 小时');
+    const lowAttemptTask = database.enqueueFileDeletion({
+      kind: 'cover',
+      storageName: 'eligible-new-cover.webp',
+      createdAt: '2026-08-23T12:01:00.000Z'
+    });
+    assert.deepEqual(
+      database.listPendingFileDeletions({
+        limit: 1,
+        eligibleAt: '2026-08-23T12:02:00.000Z'
+      }).map((item) => item.id),
+      [lowAttemptTask.id],
+      '高 attempt 且尚未到期的任务不会挡住后面已到期任务'
+    );
+    assert.throws(() => database.listPendingFileDeletions({ eligibleAt: 'not-a-date' }), /有效时间/);
+    database.completeFileDeletion(highAttemptTask.id);
+    database.completeFileDeletion(lowAttemptTask.id);
+
+    const owner = database.createUser({
+      id: 'queue-owner', username: 'queue_owner', displayName: '队列作者',
+      passwordHash: 'hash', createdAt: '2026-08-23T11:30:00.000Z'
+    });
+    database.updateUserAvatar(owner.id, {
+      storageName: 'queue-avatar-a.webp', mediaType: 'image/webp',
+      updatedAt: '2026-08-23T11:31:00.000Z'
+    });
+    database.updateUserAvatar(owner.id, {
+      storageName: 'queue-avatar-b.webp', mediaType: 'image/webp',
+      updatedAt: '2026-08-23T11:32:00.000Z'
+    });
+    assert.ok(database.listPendingFileDeletions().some(
+      (item) => item.kind === 'avatar' && item.storageName === 'queue-avatar-a.webp'
+    ));
+    database.insertVideo({
+      ...video('queue-video', '2026-08-23T11:33:00.000Z'),
+      userId: owner.id,
+      coverStorageName: 'queue-cover.webp',
+      coverMediaType: 'image/webp',
+      coverSource: 'uploaded'
+    });
+    database.withdrawVideo('queue-video', owner.id, '2026-08-23T11:34:00.000Z');
+    database.raw.exec(`
+      CREATE TRIGGER abort_file_deletion_queue
+      BEFORE INSERT ON file_deletion_queue
+      BEGIN
+        SELECT RAISE(ABORT, 'queue blocked');
+      END;
+    `);
+    assert.throws(() => database.markVideoPermanentlyDeleted(
+      'queue-video', owner.id, '2026-08-23T11:35:00.000Z'
+    ), /queue blocked/);
+    const rolledBackVideo = database.getVideo('queue-video');
+    assert.equal(rolledBackVideo.deletedAt, null);
+    assert.equal(rolledBackVideo.storageName, 'queue-video.mp4');
+    assert.equal(database.listPendingFileDeletions().some(
+      (item) => item.storageName === 'queue-video.mp4'
+    ), false);
+    database.raw.exec('DROP TRIGGER abort_file_deletion_queue');
+    database.markVideoPermanentlyDeleted(
+      'queue-video', owner.id, '2026-08-23T11:36:00.000Z'
+    );
+    assert.deepEqual(
+      database.listPendingFileDeletions()
+        .filter((item) => item.kind !== 'avatar')
+        .map((item) => [item.kind, item.storageName]),
+      [['video', 'queue-video.mp4'], ['cover', 'queue-cover.webp']]
+    );
+
+    const account = database.createUser({
+      id: 'queue-account', username: 'queue_account', displayName: '待注销队列账号',
+      passwordHash: 'hash', createdAt: '2026-08-23T11:40:00.000Z'
+    });
+    database.updateUserAvatar(account.id, {
+      storageName: 'queue-account-avatar.webp', mediaType: 'image/webp',
+      updatedAt: '2026-08-23T11:41:00.000Z'
+    });
+    database.raw.exec(`
+      CREATE TRIGGER abort_account_file_deletion_queue
+      BEFORE INSERT ON file_deletion_queue
+      BEGIN
+        SELECT RAISE(ABORT, 'account queue blocked');
+      END;
+    `);
+    assert.throws(() => database.deleteAccount(account.id, {
+      deleteVideos: false,
+      deleteDiscussions: false,
+      deletedAt: '2026-08-23T11:42:00.000Z'
+    }), /account queue blocked/);
+    assert.equal(database.getUserById(account.id).status, 'active');
+    assert.equal(database.getUserById(account.id).avatarStorageName, 'queue-account-avatar.webp');
+    database.raw.exec('DROP TRIGGER abort_account_file_deletion_queue');
+    database.deleteAccount(account.id, {
+      deleteVideos: false,
+      deleteDiscussions: false,
+      deletedAt: '2026-08-23T11:43:00.000Z'
+    });
+    assert.ok(database.listPendingFileDeletions().some(
+      (item) => item.kind === 'avatar' && item.storageName === 'queue-account-avatar.webp'
+    ));
+    assert.deepEqual(database.raw.prepare('PRAGMA foreign_key_check').all(), []);
+  } finally {
+    database?.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('讨论编辑只记录实际变化，有回复时墓碑、无回复时删除并清理空墓碑', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'tongjian-discussion-manage-test-'));
+  let database;
+  try {
+    database = openDatabase(path.join(directory, 'discussion.sqlite'));
+    const author = database.createUser({
+      id: 'discussion-author', username: 'discussion_author', displayName: '发起者',
+      passwordHash: 'hash', createdAt: '2026-08-23T12:00:00.000Z'
+    });
+    const replier = database.createUser({
+      id: 'discussion-replier', username: 'discussion_replier', displayName: '回复者',
+      passwordHash: 'hash', createdAt: '2026-08-23T12:01:00.000Z'
+    });
+    database.insertVideo({ ...video('discussion-video', '2026-08-23T12:02:00.000Z'), userId: author.id });
+    const topic = database.insertDiscussion({
+      videoId: 'discussion-video', userId: author.id, nickname: author.displayName,
+      title: '原始标题', bodyMarkdown: '原始正文', createdAt: '2026-08-23T12:03:00.000Z'
+    });
+    const unchanged = database.editDiscussion(topic.id, author.id, {
+      title: '原始标题', bodyMarkdown: '原始正文', editedAt: '2026-08-23T12:04:00.000Z'
+    });
+    assert.equal(unchanged.editCount, 0);
+    assert.equal(unchanged.editedAt, null);
+    const edited = database.editDiscussion(topic.id, author.id, {
+      title: '修改标题', bodyMarkdown: '修改正文', editedAt: '2026-08-23T12:05:00.000Z'
+    });
+    assert.equal(edited.editCount, 1);
+    assert.equal(edited.editedAt, '2026-08-23T12:05:00.000Z');
+    assert.equal(database.editDiscussion(topic.id, replier.id, {
+      title: '越权', bodyMarkdown: '越权', editedAt: '2026-08-23T12:06:00.000Z'
+    }), null);
+
+    const reply = database.insertDiscussion({
+      videoId: 'discussion-video', userId: replier.id, nickname: replier.displayName,
+      parentId: topic.id, title: '回复标题', bodyMarkdown: '回复正文',
+      createdAt: '2026-08-23T12:07:00.000Z'
+    });
+    const hardDeleteNotification = database.listNotifications(author.id).items[0];
+    assert.equal(hardDeleteNotification.type, 'reply');
+    assert.equal(hardDeleteNotification.discussionId, reply.id);
+    assert.equal(database.getUnreadNotificationCount(author.id), 1);
+    database.setDiscussionVote(topic.id, replier.id, 1, '2026-08-23T12:08:00.000Z');
+    assert.deepEqual(database.deleteDiscussion(topic.id, author.id, '2026-08-23T12:09:00.000Z'), {
+      id: topic.id, mode: 'tombstoned'
+    });
+    const tombstone = database.getDiscussion(topic.id);
+    assert.equal(tombstone.deletedAt, '2026-08-23T12:09:00.000Z');
+    assert.equal(tombstone.bodyMarkdown, '');
+    assert.equal(tombstone.userId, null);
+    assert.equal(tombstone.upvoteCount, 0);
+    assert.equal(database.editDiscussion(topic.id, author.id, {
+      title: '不能复活', bodyMarkdown: '不能复活', editedAt: '2026-08-23T12:10:00.000Z'
+    }), null);
+    assert.deepEqual(database.deleteDiscussion(reply.id, replier.id, '2026-08-23T12:11:00.000Z'), {
+      id: reply.id, mode: 'deleted'
+    });
+    assert.equal(database.getDiscussion(reply.id), null);
+    assert.equal(database.getDiscussion(topic.id), null, '最后一个回复删除后清理空墓碑');
+    assert.equal(database.getUnreadNotificationCount(author.id), 0);
+    assert.equal(
+      database.listNotifications(author.id).items.some((item) => item.id === hardDeleteNotification.id),
+      false,
+      '无回复讨论硬删除时也删除对应回复通知'
+    );
+
+    const nestedTopic = database.insertDiscussion({
+      videoId: 'discussion-video', userId: author.id, nickname: author.displayName,
+      title: '嵌套主题', bodyMarkdown: '嵌套主题正文', createdAt: '2026-08-23T12:12:00.000Z'
+    });
+    const nestedReply = database.insertDiscussion({
+      videoId: 'discussion-video', userId: replier.id, nickname: replier.displayName,
+      parentId: nestedTopic.id, bodyMarkdown: '将被墓碑化的回复',
+      createdAt: '2026-08-23T12:13:00.000Z'
+    });
+    const nestedReplyNotification = database.listNotifications(author.id).items[0];
+    assert.equal(nestedReplyNotification.discussionId, nestedReply.id);
+    database.insertDiscussion({
+      videoId: 'discussion-video', userId: author.id, nickname: author.displayName,
+      parentId: nestedReply.id, bodyMarkdown: '让父回复保留为墓碑',
+      createdAt: '2026-08-23T12:14:00.000Z'
+    });
+    assert.equal(database.getUnreadNotificationCount(author.id), 1);
+    assert.equal(database.getUnreadNotificationCount(replier.id), 1);
+    assert.deepEqual(database.deleteDiscussion(
+      nestedReply.id, replier.id, '2026-08-23T12:15:00.000Z'
+    ), { id: nestedReply.id, mode: 'tombstoned' });
+    assert.equal(database.getDiscussion(nestedReply.id).deletedAt, '2026-08-23T12:15:00.000Z');
+    assert.equal(database.getUnreadNotificationCount(author.id), 0);
+    assert.equal(
+      database.listNotifications(author.id).items.some(
+        (item) => item.id === nestedReplyNotification.id
+      ),
+      false,
+      '有子回复的讨论墓碑化时删除对应回复通知'
+    );
+    assert.equal(
+      database.getUnreadNotificationCount(replier.id),
+      1,
+      '指向仍存在子回复的另一条通知不应被误删'
+    );
+
+    const foreignKey = database.raw.prepare("PRAGMA foreign_key_list('discussions')").all()
+      .find((entry) => entry.from === 'parent_id');
+    assert.ok(['RESTRICT', 'NO ACTION'].includes(foreignKey.on_delete));
+    assert.deepEqual(database.raw.prepare('PRAGMA foreign_key_check').all(), []);
+  } finally {
+    database?.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('通知偏好、回复通知、投票聚合、系统链接和已读状态正确', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'tongjian-notification-test-'));
+  let database;
+  try {
+    database = openDatabase(path.join(directory, 'notification.sqlite'));
+    const owner = database.createUser({
+      id: 'notify-owner', username: 'notify_owner', displayName: '稿件作者',
+      passwordHash: 'hash', createdAt: '2026-08-23T13:00:00.000Z'
+    });
+    const voterA = database.createUser({
+      id: 'notify-voter-a', username: 'notify_voter_a', displayName: '投票甲',
+      passwordHash: 'hash', createdAt: '2026-08-23T13:01:00.000Z'
+    });
+    const voterB = database.createUser({
+      id: 'notify-voter-b', username: 'notify_voter_b', displayName: '投票乙',
+      passwordHash: 'hash', createdAt: '2026-08-23T13:02:00.000Z'
+    });
+    assert.deepEqual(database.getNotificationPreferences(owner.id), {
+      userId: owner.id, reply: true, videoVote: true, system: true,
+      updatedAt: '2026-08-23T13:00:00.000Z'
+    });
+    database.insertVideo({ ...video('notify-video', '2026-08-23T13:03:00.000Z'), userId: owner.id });
+    database.setVideoVote('notify-video', voterA.id, 1, '2026-08-23T13:04:00.000Z');
+    database.setVideoVote('notify-video', voterA.id, 1, '2026-08-23T13:05:00.000Z');
+    database.setVideoVote('notify-video', voterB.id, 1, '2026-08-23T13:06:00.000Z');
+    let notification = database.listNotifications(owner.id).items[0];
+    assert.equal(notification.type, 'video_upvote');
+    assert.equal(notification.count, 2, '重复投票不提醒，不同用户同方向聚合');
+    assert.equal(database.getUnreadNotificationCount(owner.id), 2);
+    assert.equal(database.pollNotifications(owner.id).items.length, 1);
+
+    database.setVideoVote('notify-video', voterA.id, 0, '2026-08-23T13:06:10.000Z');
+    notification = database.listNotifications(owner.id, { unreadOnly: true }).items[0];
+    assert.equal(notification.type, 'video_upvote');
+    assert.equal(notification.count, 1, '取消投票会从当前未读聚合移除该账号');
+    database.setVideoVote('notify-video', voterA.id, 1, '2026-08-23T13:06:20.000Z');
+    assert.equal(database.getUnreadNotificationCount(owner.id), 2, '取消后重新投票不会刷高净人数');
+
+    database.setVideoVote('notify-video', voterA.id, -1, '2026-08-23T13:06:30.000Z');
+    database.setVideoVote('notify-video', voterA.id, -1, '2026-08-23T13:06:40.000Z');
+    let unreadVotes = database.listNotifications(owner.id, { unreadOnly: true }).items;
+    assert.deepEqual(
+      Object.fromEntries(unreadVotes.map((item) => [item.type, item.count])),
+      { video_downvote: 1, video_upvote: 1 },
+      '切换方向会从旧方向移除并只向新方向加入一次'
+    );
+    database.setVideoVote('notify-video', voterA.id, 1, '2026-08-23T13:06:50.000Z');
+    unreadVotes = database.listNotifications(owner.id, { unreadOnly: true }).items;
+    assert.equal(unreadVotes.length, 1);
+    assert.equal(unreadVotes[0].type, 'video_upvote');
+    assert.equal(unreadVotes[0].count, 2);
+    database.setVideoVote('notify-video', voterA.id, 0, '2026-08-23T13:06:55.000Z');
+    database.setVideoVote('notify-video', voterA.id, 1, '2026-08-23T13:06:58.000Z');
+    assert.equal(database.getUnreadNotificationCount(owner.id), 2);
+    assert.equal(database.raw.prepare(`
+      SELECT count(*) AS count FROM notification_vote_actors
+      WHERE notification_id = ?
+    `).get(database.listNotifications(owner.id, { unreadOnly: true }).items[0].id).count, 2);
+
+    notification = database.listNotifications(owner.id, { unreadOnly: true }).items[0];
+    assert.equal(database.markNotificationRead(
+      notification.id, owner.id, '2026-08-23T13:07:00.000Z'
+    ).isRead, true);
+
+    database.setVideoVote('notify-video', voterA.id, -1, '2026-08-23T13:08:00.000Z');
+    notification = database.listNotifications(owner.id).items[0];
+    assert.equal(notification.type, 'video_downvote');
+    assert.equal(notification.count, 1);
+    const system = database.createSystemNotification({
+      recipientUserId: owner.id, title: '稿件需要修改', body: '请检查封面',
+      link: '/account/videos?status=returned', createdAt: '2026-08-23T13:09:00.000Z'
+    });
+    assert.equal(system.systemLink, '/account/videos?status=returned');
+    assert.equal(database.markAllNotificationsRead(owner.id, '2026-08-23T13:10:00.000Z'), 2);
+    assert.equal(database.getUnreadNotificationCount(owner.id), 0);
+
+    database.updateNotificationPreferences(owner.id, {
+      reply: true, videoVote: false, system: false
+    }, '2026-08-23T13:11:00.000Z');
+    database.setVideoVote('notify-video', voterB.id, -1, '2026-08-23T13:12:00.000Z');
+    assert.equal(database.createSystemNotification({
+      recipientUserId: owner.id, title: '不会生成', createdAt: '2026-08-23T13:13:00.000Z'
+    }), null);
+    assert.equal(database.getUnreadNotificationCount(owner.id), 0);
+  } finally {
+    database?.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('注销账号可选择保留或清除内容，并撤销会话、投票、通知及个人资料', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'tongjian-delete-account-test-'));
+  let database;
+  try {
+    database = openDatabase(path.join(directory, 'delete-account.sqlite'));
+    const retained = database.createUser({
+      id: 'retained-user', username: 'retained_username', displayName: '保留作者',
+      passwordHash: 'hash', createdAt: '2026-08-23T13:50:00.000Z'
+    });
+    database.insertVideo({
+      ...video('retained-account-video', '2026-08-23T13:51:00.000Z'), userId: retained.id
+    });
+    const retainedDiscussion = database.insertDiscussion({
+      videoId: 'retained-account-video', userId: retained.id, nickname: retained.displayName,
+      title: '保留讨论', bodyMarkdown: '保留正文', createdAt: '2026-08-23T13:52:00.000Z'
+    });
+    database.deleteAccount(retained.id, {
+      deleteVideos: false, deleteDiscussions: false, deletedAt: '2026-08-23T13:53:00.000Z'
+    });
+    assert.equal(database.getVideo('retained-account-video').deletedAt, null);
+    assert.equal(database.getVideo('retained-account-video').accountDisplayName, '已注销用户');
+    assert.equal(
+      database.getVideo('retained-account-video').creator,
+      '测试创作者',
+      '保留稿件时不得把作品 CC 署名误当成账号显示名擦除'
+    );
+    assert.equal(database.getDiscussion(retainedDiscussion.id).accountDisplayName, '已注销用户');
+    assert.equal(database.getDiscussion(retainedDiscussion.id).nickname, '已注销用户');
+
+    const user = database.createUser({
+      id: 'delete-user', username: 'reserved_username', displayName: '待注销用户',
+      passwordHash: 'hash', createdAt: '2026-08-23T14:00:00.000Z'
+    });
+    database.updateUserAvatar(user.id, {
+      storageName: 'deleted-avatar.webp', mediaType: 'image/webp', updatedAt: '2026-08-23T14:01:00.000Z'
+    });
+    database.createSession({
+      tokenHash: 'e'.repeat(64), userId: user.id, csrfTokenHash: 'f'.repeat(64),
+      createdAt: '2026-08-23T14:02:00.000Z', expiresAt: '2026-09-23T14:02:00.000Z'
+    });
+    database.insertVideo({
+      ...video('delete-account-video', '2026-08-23T14:03:00.000Z'), userId: user.id,
+      coverStorageName: 'delete-account-cover.webp', coverMediaType: 'image/webp', coverSource: 'uploaded'
+    });
+    database.insertDiscussion({
+      videoId: 'delete-account-video', userId: user.id, nickname: user.displayName,
+      title: '删除我的讨论', bodyMarkdown: '将被清除', createdAt: '2026-08-23T14:04:00.000Z'
+    });
+    const result = database.deleteAccount(user.id, {
+      deleteVideos: true, deleteDiscussions: true, deletedAt: '2026-08-23T14:05:00.000Z'
+    });
+    assert.equal(result.avatarStorageName, 'deleted-avatar.webp');
+    assert.deepEqual(result.assets.map((item) => item.storageName), ['delete-account-video.mp4']);
+    assert.equal(database.findSessionByTokenHash('e'.repeat(64)), null);
+    assert.equal(database.getPublicUserProfile(user.username), null);
+    const tombstoneUser = database.findUserByUsername(user.username);
+    assert.equal(tombstoneUser.status, 'disabled');
+    assert.equal(tombstoneUser.displayName, '已注销用户');
+    assert.equal(tombstoneUser.avatarStorageName, null);
+    assert.equal(database.listAvatarStorageNames().includes('deleted-avatar.webp'), false);
+    assert.equal(database.getNotificationPreferences(user.id), null);
+    assert.equal(database.getVideo('delete-account-video').deletedAt, '2026-08-23T14:05:00.000Z');
+    assert.equal(
+      database.getVideo('delete-account-video').archivePublic,
+      true,
+      '注销账号直接删除公开稿件时也应保留公开档案属性'
+    );
+    assert.equal(database.getVideo('delete-account-video').creator, '已注销用户');
+    assert.deepEqual(database.listDiscussions('delete-account-video'), []);
+    assert.deepEqual(
+      database.listPendingFileDeletions().map((item) => [item.kind, item.storageName]),
+      [
+        ['video', 'delete-account-video.mp4'],
+        ['cover', 'delete-account-cover.webp'],
+        ['avatar', 'deleted-avatar.webp']
+      ]
+    );
+    assert.throws(() => database.createUser({
+      id: 'replacement-user', username: user.username, displayName: '冒名用户',
+      passwordHash: 'hash', createdAt: '2026-08-23T14:06:00.000Z'
+    }), /UNIQUE/i);
+  } finally {
+    database?.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('schema v3 迁移到 v4 保留树状讨论和投票，并更换父级删除约束', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'tongjian-v3-migration-test-'));
+  const databasePath = path.join(directory, 'v3.sqlite');
+  let database;
+  try {
+    const seed = openDatabase(databasePath);
+    const user = seed.createUser({
+      id: 'v3-user', username: 'v3_user', displayName: 'V3 用户',
+      passwordHash: 'hash', createdAt: '2026-08-23T15:00:00.000Z'
+    });
+    seed.insertVideo({ ...video('v3-video', '2026-08-23T15:01:00.000Z'), userId: user.id });
+    const parent = seed.insertDiscussion({
+      videoId: 'v3-video', userId: user.id, nickname: user.displayName,
+      title: 'V3 主题', bodyMarkdown: 'V3 正文', createdAt: '2026-08-23T15:02:00.000Z'
+    });
+    const reply = seed.insertDiscussion({
+      videoId: 'v3-video', userId: user.id, nickname: user.displayName,
+      parentId: parent.id, bodyMarkdown: 'V3 回复', createdAt: '2026-08-23T15:03:00.000Z'
+    });
+    seed.setDiscussionVote(parent.id, user.id, 1, '2026-08-23T15:04:00.000Z');
+
+    seed.raw.exec(`
+      PRAGMA foreign_keys = OFF;
+      BEGIN IMMEDIATE;
+      DROP TABLE notification_vote_actors;
+      DROP TABLE notifications;
+      DROP TABLE notification_preferences;
+      DROP TABLE file_deletion_queue;
+      DROP INDEX idx_users_avatar_storage_name;
+      DROP INDEX idx_users_public_username;
+      DROP INDEX idx_videos_user_created_at;
+      DROP INDEX idx_videos_public_user_created_at;
+      ALTER TABLE users DROP COLUMN bio;
+      ALTER TABLE users DROP COLUMN avatar_storage_name;
+      ALTER TABLE users DROP COLUMN avatar_media_type;
+      ALTER TABLE users DROP COLUMN updated_at;
+      ALTER TABLE users DROP COLUMN deleted_at;
+      ALTER TABLE videos DROP COLUMN withdrawn_at;
+      ALTER TABLE videos DROP COLUMN deleted_at;
+      ALTER TABLE videos DROP COLUMN archive_public;
+      CREATE TABLE discussions_v3 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        video_id TEXT NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+        nickname TEXT NOT NULL,
+        body_markdown TEXT NOT NULL CHECK (length(body_markdown) BETWEEN 1 AND 5000),
+        user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL,
+        title TEXT CHECK (title IS NULL OR length(title) BETWEEN 1 AND 120),
+        parent_id INTEGER REFERENCES discussions_v3(id) ON DELETE CASCADE,
+        edited_at TEXT,
+        deleted_at TEXT
+      ) STRICT;
+      INSERT INTO discussions_v3 (
+        id, video_id, nickname, body_markdown, user_id, created_at,
+        title, parent_id, edited_at, deleted_at
+      ) SELECT
+        id, video_id, nickname, body_markdown, user_id, created_at,
+        title, parent_id, edited_at, deleted_at
+      FROM discussions ORDER BY id;
+      DROP TABLE discussions;
+      ALTER TABLE discussions_v3 RENAME TO discussions;
+      CREATE INDEX idx_discussions_video_created_at_id ON discussions(video_id, created_at ASC, id ASC);
+      CREATE INDEX idx_discussions_user_id ON discussions(user_id);
+      CREATE INDEX idx_discussions_parent_created_at ON discussions(parent_id, created_at ASC, id ASC);
+      PRAGMA user_version = 3;
+      COMMIT;
+      PRAGMA foreign_keys = ON;
+    `);
+    seed.close();
+
+    database = openDatabase(databasePath);
+    assert.equal(database.getSchemaVersion(), 4);
+    assert.equal(database.getUserById(user.id).bio, '');
+    assert.equal(database.getVideo('v3-video').withdrawnAt, null);
+    assert.equal(database.getDiscussion(parent.id).editCount, 0);
+    assert.equal(database.getDiscussion(reply.id).parentId, parent.id);
+    assert.equal(database.getDiscussion(parent.id, user.id).viewerVote, 1);
+    assert.deepEqual(database.getNotificationPreferences(user.id), {
+      userId: user.id, reply: true, videoVote: true, system: true,
+      updatedAt: '2026-08-23T15:00:00.000Z'
+    });
+    const parentForeignKey = database.raw.prepare("PRAGMA foreign_key_list('discussions')").all()
+      .find((entry) => entry.from === 'parent_id');
+    assert.ok(['RESTRICT', 'NO ACTION'].includes(parentForeignKey.on_delete));
+    assert.deepEqual(database.raw.prepare('PRAGMA foreign_key_check').all(), []);
+  } finally {
+    database?.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('已标记为 v4 的旧数据库会幂等补建删除队列和公开档案字段', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'tongjian-v4-supplement-test-'));
+  const databasePath = path.join(directory, 'v4.sqlite');
+  let database;
+  try {
+    const seed = openDatabase(databasePath);
+    seed.insertVideo(video('pre-supplement-video', '2026-08-23T16:00:00.000Z'));
+    seed.close();
+
+    const oldV4 = new DatabaseSync(databasePath);
+    oldV4.exec(`
+      DROP TABLE file_deletion_queue;
+      CREATE TABLE file_deletion_queue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind TEXT NOT NULL CHECK (kind IN ('video', 'cover', 'avatar')),
+        storage_name TEXT NOT NULL,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (kind, storage_name)
+      ) STRICT;
+      INSERT INTO file_deletion_queue (
+        kind, storage_name, attempt_count, last_error, created_at, updated_at
+      ) VALUES (
+        'cover', 'legacy-v4-cover.webp', 2, '旧失败任务',
+        '2026-08-23T15:58:00.000Z', '2026-08-23T15:59:00.000Z'
+      );
+      DROP TABLE notification_vote_actors;
+      ALTER TABLE videos DROP COLUMN archive_public;
+      PRAGMA user_version = 4;
+    `);
+    oldV4.close();
+
+    database = openDatabase(databasePath);
+    assert.equal(database.getSchemaVersion(), 4);
+    assert.ok(database.raw.prepare("PRAGMA table_info('videos')").all()
+      .some((column) => column.name === 'archive_public'));
+    assert.deepEqual(
+      database.raw.prepare("PRAGMA table_info('file_deletion_queue')").all()
+        .map((column) => column.name),
+      [
+        'id', 'kind', 'storage_name', 'attempt_count', 'last_error',
+        'created_at', 'updated_at', 'next_attempt_at'
+      ]
+    );
+    const migratedDeletion = database.listPendingFileDeletions()
+      .find((item) => item.storageName === 'legacy-v4-cover.webp');
+    assert.equal(migratedDeletion.nextAttemptAt, '2026-08-23T15:59:00.000Z');
+    assert.equal(database.getVideo('pre-supplement-video').archivePublic, false);
+    assert.equal(database.enqueueFileDeletion({
+      kind: 'video',
+      storageName: 'old-v4-orphan.mp4',
+      createdAt: '2026-08-23T16:01:00.000Z'
+    }).storageName, 'old-v4-orphan.mp4');
+    assert.equal(database.listPendingFileDeletions().length, 2);
+
+    database.close();
+    database = openDatabase(databasePath);
+    assert.equal(database.listPendingFileDeletions().length, 2, '重复打开 v4 数据库不会清空或重复队列');
   } finally {
     database?.close();
     await rm(directory, { recursive: true, force: true });

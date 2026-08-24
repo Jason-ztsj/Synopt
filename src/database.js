@@ -2,8 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
+const DEFAULT_PAGE_SIZE = 20;
+const MAX_PAGE_SIZE = 100;
+const FILE_DELETION_KINDS = new Set(['video', 'cover', 'avatar']);
+const MAX_FILE_DELETION_ERROR_LENGTH = 2000;
+const FILE_DELETION_INITIAL_BACKOFF_MS = 5_000;
+const FILE_DELETION_MAX_BACKOFF_MS = 6 * 60 * 60 * 1000;
 
 function requireSha256Hash(value, name) {
   if (typeof value !== 'string' || !SHA256_HEX_PATTERN.test(value)) {
@@ -45,6 +51,8 @@ function mapVideo(row) {
     userId: row.user_id ?? null,
     accountUsername: row.account_username ?? null,
     accountDisplayName: row.account_display_name ?? null,
+    accountAvatarStorageName: row.account_avatar_storage_name ?? null,
+    accountAvatarMediaType: row.account_avatar_media_type ?? null,
     categoryId: row.category_id ?? null,
     categorySlug: row.category_slug ?? null,
     categoryName: row.category_name ?? null,
@@ -61,8 +69,26 @@ function mapVideo(row) {
       : [],
     upvoteCount: row.upvote_count ?? 0,
     downvoteCount: row.downvote_count ?? 0,
+    discussionCount: row.discussion_count ?? 0,
     viewerVote: row.viewer_vote ?? 0,
+    archivePublic: row.archive_public === 1,
+    withdrawnAt: row.withdrawn_at ?? null,
+    deletedAt: row.deleted_at ?? null,
     createdAt: row.created_at
+  };
+}
+
+function mapFileDeletion(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    kind: row.kind,
+    storageName: row.storage_name,
+    attemptCount: row.attempt_count,
+    lastError: row.last_error ?? null,
+    nextAttemptAt: row.next_attempt_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
   };
 }
 
@@ -86,10 +112,15 @@ function mapDiscussion(row) {
     userId: row.user_id ?? null,
     accountUsername: row.account_username ?? null,
     accountDisplayName: row.account_display_name ?? null,
+    accountAvatarStorageName: row.account_avatar_storage_name ?? null,
+    accountAvatarMediaType: row.account_avatar_media_type ?? null,
     title: row.title ?? null,
     parentId: row.parent_id ?? null,
     editedAt: row.edited_at ?? null,
+    editCount: row.edit_count ?? 0,
     deletedAt: row.deleted_at ?? null,
+    videoTitle: row.video_title ?? null,
+    replyCount: row.reply_count ?? 0,
     upvoteCount: row.upvote_count ?? 0,
     downvoteCount: row.downvote_count ?? 0,
     viewerVote: row.viewer_vote ?? 0,
@@ -104,10 +135,56 @@ function mapUser(row) {
     username: row.username,
     displayName: row.display_name,
     passwordHash: row.password_hash,
+    bio: row.bio ?? '',
+    avatarStorageName: row.avatar_storage_name ?? null,
+    avatarMediaType: row.avatar_media_type ?? null,
     role: row.role ?? 'member',
     status: row.status ?? 'active',
+    updatedAt: row.updated_at ?? row.created_at,
+    deletedAt: row.deleted_at ?? null,
     createdAt: row.created_at
   };
+}
+
+function mapNotificationPreferences(row) {
+  if (!row) return null;
+  return {
+    userId: row.user_id,
+    reply: row.reply === 1,
+    videoVote: row.video_vote === 1,
+    system: row.system === 1,
+    updatedAt: row.updated_at
+  };
+}
+
+function mapNotification(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    recipientUserId: row.recipient_user_id,
+    type: row.type,
+    actorUserId: row.actor_user_id ?? null,
+    actorDisplayName: row.actor_display_name ?? null,
+    videoId: row.video_id ?? null,
+    videoTitle: row.video_title ?? null,
+    discussionId: row.discussion_id ?? null,
+    count: row.event_count,
+    isRead: row.is_read === 1,
+    systemTitle: row.system_title ?? null,
+    systemBody: row.system_body ?? null,
+    systemLink: row.system_link ?? null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    readAt: row.read_at ?? null
+  };
+}
+
+function normalizePagination(options = {}) {
+  const limit = Number.isSafeInteger(options.limit)
+    ? Math.min(Math.max(options.limit, 1), MAX_PAGE_SIZE)
+    : DEFAULT_PAGE_SIZE;
+  const offset = Number.isSafeInteger(options.offset) ? Math.max(options.offset, 0) : 0;
+  return { limit, offset };
 }
 
 function mapSession(row) {
@@ -122,8 +199,13 @@ function mapSession(row) {
       id: row.user_id,
       username: row.account_username,
       displayName: row.account_display_name,
+      bio: row.account_bio ?? '',
+      avatarStorageName: row.account_avatar_storage_name ?? null,
+      avatarMediaType: row.account_avatar_media_type ?? null,
       role: row.account_role ?? 'member',
       status: row.account_status ?? 'active',
+      updatedAt: row.account_updated_at ?? row.account_created_at,
+      deletedAt: row.account_deleted_at ?? null,
       createdAt: row.account_created_at
     }
   };
@@ -131,6 +213,43 @@ function mapSession(row) {
 
 function hasColumn(database, table, column) {
   return database.prepare(`PRAGMA table_info('${table}')`).all().some((entry) => entry.name === column);
+}
+
+function hasTable(database, table) {
+  return database.prepare(`
+    SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?
+  `).get(table) !== undefined;
+}
+
+function validateFileDeletionTarget(kind, storageName) {
+  if (!FILE_DELETION_KINDS.has(kind)) {
+    throw new TypeError('文件删除类型必须是 video、cover 或 avatar');
+  }
+  if (
+    typeof storageName !== 'string'
+    || storageName.length < 1
+    || storageName.length > 255
+    || storageName.includes('/')
+    || storageName.includes('\\')
+    || storageName === '.'
+    || storageName === '..'
+    || storageName.includes('\0')
+  ) {
+    throw new TypeError('待删除文件名必须是安全的存储文件名');
+  }
+}
+
+function nextFileDeletionAttemptAt(failedAt, attemptCount) {
+  const failedAtMs = Date.parse(failedAt);
+  if (!Number.isFinite(failedAtMs)) {
+    throw new TypeError('文件删除失败时间必须是有效时间');
+  }
+  const exponent = Math.min(Math.max(attemptCount - 1, 0), 32);
+  const delayMs = Math.min(
+    FILE_DELETION_INITIAL_BACKOFF_MS * (2 ** exponent),
+    FILE_DELETION_MAX_BACKOFF_MS
+  );
+  return new Date(failedAtMs + delayMs).toISOString();
 }
 
 function migrateToV1(database) {
@@ -371,6 +490,240 @@ function migrateToV3(database) {
   }
 }
 
+function migrateToV4(database) {
+  database.exec('PRAGMA foreign_keys = OFF');
+  database.exec('BEGIN IMMEDIATE');
+  try {
+    database.exec("ALTER TABLE users ADD COLUMN bio TEXT NOT NULL DEFAULT '' CHECK (length(bio) <= 500)");
+    database.exec('ALTER TABLE users ADD COLUMN avatar_storage_name TEXT');
+    database.exec("ALTER TABLE users ADD COLUMN avatar_media_type TEXT CHECK (avatar_media_type IS NULL OR avatar_media_type IN ('image/jpeg', 'image/png', 'image/webp'))");
+    database.exec('ALTER TABLE users ADD COLUMN updated_at TEXT');
+    database.exec('ALTER TABLE users ADD COLUMN deleted_at TEXT');
+    database.exec('UPDATE users SET updated_at = created_at WHERE updated_at IS NULL');
+
+    database.exec('ALTER TABLE videos ADD COLUMN withdrawn_at TEXT');
+    database.exec('ALTER TABLE videos ADD COLUMN deleted_at TEXT');
+    database.exec('ALTER TABLE videos ADD COLUMN archive_public INTEGER NOT NULL DEFAULT 0 CHECK (archive_public IN (0, 1))');
+
+    database.exec(`
+      CREATE TABLE discussions_v4 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        video_id TEXT NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+        nickname TEXT NOT NULL,
+        body_markdown TEXT NOT NULL CHECK (
+          (deleted_at IS NULL AND length(body_markdown) BETWEEN 1 AND 5000)
+          OR (deleted_at IS NOT NULL AND body_markdown = '')
+        ),
+        user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL,
+        title TEXT CHECK (title IS NULL OR length(title) BETWEEN 1 AND 120),
+        parent_id INTEGER REFERENCES discussions_v4(id) ON DELETE RESTRICT,
+        edited_at TEXT,
+        deleted_at TEXT,
+        edit_count INTEGER NOT NULL DEFAULT 0 CHECK (edit_count >= 0)
+      ) STRICT;
+    `);
+    database.exec(`
+      INSERT INTO discussions_v4 (
+        id, video_id, nickname, body_markdown, user_id, created_at,
+        title, parent_id, edited_at, deleted_at, edit_count
+      )
+      SELECT
+        id, video_id,
+        CASE WHEN deleted_at IS NULL THEN nickname ELSE '已删除用户' END,
+        CASE WHEN deleted_at IS NULL THEN body_markdown ELSE '' END,
+        CASE WHEN deleted_at IS NULL THEN user_id ELSE NULL END,
+        created_at,
+        CASE WHEN deleted_at IS NULL THEN title ELSE NULL END,
+        parent_id,
+        CASE WHEN deleted_at IS NULL THEN edited_at ELSE NULL END,
+        deleted_at,
+        CASE WHEN deleted_at IS NULL AND edited_at IS NOT NULL THEN 1 ELSE 0 END
+      FROM discussions
+      ORDER BY id ASC;
+    `);
+    database.exec('DROP TABLE discussions');
+    database.exec('ALTER TABLE discussions_v4 RENAME TO discussions');
+
+    database.exec(`
+      CREATE TABLE notification_preferences (
+        user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        reply INTEGER NOT NULL DEFAULT 1 CHECK (reply IN (0, 1)),
+        video_vote INTEGER NOT NULL DEFAULT 1 CHECK (video_vote IN (0, 1)),
+        system INTEGER NOT NULL DEFAULT 1 CHECK (system IN (0, 1)),
+        updated_at TEXT NOT NULL
+      ) STRICT;
+    `);
+    database.exec(`
+      INSERT INTO notification_preferences (user_id, reply, video_vote, system, updated_at)
+      SELECT id, 1, 1, 1, COALESCE(updated_at, created_at) FROM users;
+    `);
+    database.exec(`
+      CREATE TABLE notifications (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        recipient_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        type TEXT NOT NULL CHECK (type IN ('reply', 'video_upvote', 'video_downvote', 'system')),
+        actor_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        video_id TEXT REFERENCES videos(id) ON DELETE SET NULL,
+        discussion_id INTEGER REFERENCES discussions(id) ON DELETE SET NULL,
+        event_count INTEGER NOT NULL DEFAULT 1 CHECK (event_count > 0),
+        is_read INTEGER NOT NULL DEFAULT 0 CHECK (is_read IN (0, 1)),
+        system_title TEXT CHECK (system_title IS NULL OR length(system_title) BETWEEN 1 AND 120),
+        system_body TEXT CHECK (system_body IS NULL OR length(system_body) <= 1000),
+        system_link TEXT CHECK (system_link IS NULL OR length(system_link) BETWEEN 1 AND 500),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        read_at TEXT
+      ) STRICT;
+    `);
+
+    database.exec('CREATE UNIQUE INDEX idx_users_avatar_storage_name ON users(avatar_storage_name) WHERE avatar_storage_name IS NOT NULL');
+    database.exec('CREATE INDEX idx_users_public_username ON users(username) WHERE status = \'active\' AND deleted_at IS NULL');
+    database.exec('CREATE INDEX idx_videos_user_created_at ON videos(user_id, created_at DESC, id DESC)');
+    database.exec('CREATE INDEX idx_videos_public_user_created_at ON videos(user_id, created_at DESC, id DESC) WHERE visibility = \'public\' AND moderation_status = \'visible\' AND withdrawn_at IS NULL AND deleted_at IS NULL');
+    database.exec('CREATE INDEX idx_discussions_video_created_at_id ON discussions(video_id, created_at ASC, id ASC)');
+    database.exec('CREATE INDEX idx_discussions_user_id ON discussions(user_id)');
+    database.exec('CREATE INDEX idx_discussions_user_created_at ON discussions(user_id, created_at DESC, id DESC)');
+    database.exec('CREATE INDEX idx_discussions_parent_created_at ON discussions(parent_id, created_at ASC, id ASC)');
+    database.exec('CREATE INDEX idx_notifications_recipient_created_at ON notifications(recipient_user_id, created_at DESC, id DESC)');
+    database.exec('CREATE INDEX idx_notifications_recipient_unread ON notifications(recipient_user_id, is_read, id DESC)');
+    database.exec(`
+      CREATE UNIQUE INDEX idx_notifications_reply_discussion
+      ON notifications(discussion_id)
+      WHERE type = 'reply' AND discussion_id IS NOT NULL
+    `);
+    database.exec(`
+      CREATE UNIQUE INDEX idx_notifications_unread_video_vote
+      ON notifications(recipient_user_id, type, video_id)
+      WHERE is_read = 0 AND type IN ('video_upvote', 'video_downvote') AND video_id IS NOT NULL
+    `);
+
+    const foreignKeyErrors = database.prepare('PRAGMA foreign_key_check').all();
+    if (foreignKeyErrors.length > 0) throw new Error('数据库 v4 迁移后的外键检查失败');
+    database.exec('PRAGMA user_version = 4');
+    database.exec('COMMIT');
+  } catch (error) {
+    database.exec('ROLLBACK');
+    throw error;
+  } finally {
+    database.exec('PRAGMA foreign_keys = ON');
+  }
+}
+
+function ensureV4SupplementalSchema(database) {
+  database.exec('BEGIN IMMEDIATE');
+  try {
+    const hadNotificationVoteActors = hasTable(database, 'notification_vote_actors');
+    if (!hasColumn(database, 'videos', 'archive_public')) {
+      database.exec('ALTER TABLE videos ADD COLUMN archive_public INTEGER NOT NULL DEFAULT 0 CHECK (archive_public IN (0, 1))');
+    }
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS file_deletion_queue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind TEXT NOT NULL CHECK (kind IN ('video', 'cover', 'avatar')),
+        storage_name TEXT NOT NULL CHECK (length(storage_name) BETWEEN 1 AND 255),
+        attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+        last_error TEXT CHECK (last_error IS NULL OR length(last_error) <= 2000),
+        next_attempt_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (kind, storage_name)
+      ) STRICT;
+    `);
+    if (!hasColumn(database, 'file_deletion_queue', 'next_attempt_at')) {
+      database.exec('ALTER TABLE file_deletion_queue ADD COLUMN next_attempt_at TEXT');
+    }
+    database.exec(`
+      UPDATE file_deletion_queue SET next_attempt_at = updated_at
+      WHERE next_attempt_at IS NULL
+    `);
+    database.exec(`
+      CREATE INDEX IF NOT EXISTS idx_file_deletion_queue_updated_at
+      ON file_deletion_queue(updated_at ASC, id ASC)
+    `);
+    database.exec(`
+      CREATE INDEX IF NOT EXISTS idx_file_deletion_queue_next_attempt_at
+      ON file_deletion_queue(next_attempt_at ASC, id ASC)
+    `);
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS notification_vote_actors (
+        notification_id INTEGER NOT NULL REFERENCES notifications(id) ON DELETE CASCADE,
+        actor_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        value INTEGER NOT NULL CHECK (value IN (-1, 1)),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (notification_id, actor_user_id)
+      ) STRICT;
+    `);
+    database.exec(`
+      CREATE INDEX IF NOT EXISTS idx_notification_vote_actors_actor_value
+      ON notification_vote_actors(actor_user_id, value, notification_id)
+    `);
+    if (!hadNotificationVoteActors) {
+      // Older v4 builds only retained the most recent actor on an aggregated
+      // vote notification. The missing actor set cannot be reconstructed from
+      // the current net votes without inventing history, so safely close those
+      // old unread windows and let future votes start an exact window.
+      database.exec(`
+        UPDATE notifications
+        SET is_read = 1,
+            read_at = COALESCE(read_at, updated_at),
+            actor_user_id = NULL
+        WHERE type IN ('video_upvote', 'video_downvote') AND is_read = 0
+      `);
+      database.exec(`
+        UPDATE notifications SET actor_user_id = NULL
+        WHERE type IN ('video_upvote', 'video_downvote')
+      `);
+    } else {
+      // Repair any window produced by the earlier lossy supplemental backfill.
+      // Only exact unread windows remain mutable; inconsistent history becomes
+      // read-only history rather than allowing event_count to drift forever.
+      database.exec(`
+        UPDATE notifications AS notification
+        SET is_read = 1,
+            read_at = COALESCE(read_at, updated_at),
+            actor_user_id = NULL
+        WHERE notification.type IN ('video_upvote', 'video_downvote')
+          AND notification.is_read = 0
+          AND (
+            notification.event_count != (
+              SELECT count(*) FROM notification_vote_actors AS actor
+              WHERE actor.notification_id = notification.id
+            )
+            OR EXISTS (
+              SELECT 1 FROM notification_vote_actors AS actor
+              WHERE actor.notification_id = notification.id
+                AND actor.value != CASE notification.type WHEN 'video_upvote' THEN 1 ELSE -1 END
+            )
+            OR EXISTS (
+              SELECT 1 FROM notification_vote_actors AS actor
+              WHERE actor.notification_id = notification.id
+                AND NOT EXISTS (
+                  SELECT 1 FROM video_votes AS vote
+                  WHERE vote.video_id = notification.video_id
+                    AND vote.user_id = actor.actor_user_id
+                    AND vote.value = actor.value
+                )
+            )
+            OR NOT EXISTS (
+              SELECT 1 FROM notification_vote_actors AS actor
+              WHERE actor.notification_id = notification.id
+                AND actor.actor_user_id = notification.actor_user_id
+            )
+          )
+      `);
+    }
+    database.exec(`
+      DELETE FROM notification_vote_actors
+      WHERE notification_id IN (SELECT id FROM notifications WHERE is_read = 1)
+    `);
+    database.exec('COMMIT');
+  } catch (error) {
+    database.exec('ROLLBACK');
+    throw error;
+  }
+}
+
 function migrate(database) {
   let version = database.prepare('PRAGMA user_version').get().user_version;
   if (version > CURRENT_SCHEMA_VERSION) {
@@ -384,7 +737,12 @@ function migrate(database) {
     migrateToV2(database);
     version = 2;
   }
-  if (version < 3) migrateToV3(database);
+  if (version < 3) {
+    migrateToV3(database);
+    version = 3;
+  }
+  if (version < 4) migrateToV4(database);
+  ensureV4SupplementalSchema(database);
 }
 
 export function openDatabase(databasePath) {
@@ -405,8 +763,10 @@ export function openDatabase(databasePath) {
   const videoSelect = `
     SELECT
       v.*,
-      u.username AS account_username,
-      u.display_name AS account_display_name,
+      CASE WHEN u.deleted_at IS NULL THEN u.username ELSE NULL END AS account_username,
+      CASE WHEN u.deleted_at IS NULL THEN u.display_name WHEN u.id IS NOT NULL THEN '已注销用户' ELSE NULL END AS account_display_name,
+      CASE WHEN u.deleted_at IS NULL THEN u.avatar_storage_name ELSE NULL END AS account_avatar_storage_name,
+      CASE WHEN u.deleted_at IS NULL THEN u.avatar_media_type ELSE NULL END AS account_avatar_media_type,
       c.slug AS category_slug,
       c.name AS category_name,
       (
@@ -420,7 +780,8 @@ export function openDatabase(databasePath) {
         ) AS tag_row
       ) AS tag_list,
       (SELECT count(*) FROM video_votes AS vv WHERE vv.video_id = v.id AND vv.value = 1) AS upvote_count,
-      (SELECT count(*) FROM video_votes AS vv WHERE vv.video_id = v.id AND vv.value = -1) AS downvote_count
+      (SELECT count(*) FROM video_votes AS vv WHERE vv.video_id = v.id AND vv.value = -1) AS downvote_count,
+      (SELECT count(*) FROM discussions AS vd WHERE vd.video_id = v.id AND vd.deleted_at IS NULL) AS discussion_count
     FROM videos AS v
     LEFT JOIN users AS u ON u.id = v.user_id
     LEFT JOIN categories AS c ON c.id = v.category_id
@@ -428,27 +789,50 @@ export function openDatabase(databasePath) {
   const discussionSelect = `
     SELECT
       d.*,
-      u.username AS account_username,
-      u.display_name AS account_display_name,
+      CASE WHEN u.deleted_at IS NULL THEN u.username ELSE NULL END AS account_username,
+      CASE WHEN u.deleted_at IS NULL THEN u.display_name WHEN u.id IS NOT NULL THEN '已注销用户' ELSE NULL END AS account_display_name,
+      CASE WHEN u.deleted_at IS NULL THEN u.avatar_storage_name ELSE NULL END AS account_avatar_storage_name,
+      CASE WHEN u.deleted_at IS NULL THEN u.avatar_media_type ELSE NULL END AS account_avatar_media_type,
+      v.title AS video_title,
+      (SELECT count(*) FROM discussions AS child WHERE child.parent_id = d.id) AS reply_count,
       (SELECT count(*) FROM discussion_votes AS dv WHERE dv.discussion_id = d.id AND dv.value = 1) AS upvote_count,
       (SELECT count(*) FROM discussion_votes AS dv WHERE dv.discussion_id = d.id AND dv.value = -1) AS downvote_count
     FROM discussions AS d
     LEFT JOIN users AS u ON u.id = d.user_id
+    JOIN videos AS v ON v.id = d.video_id
   `;
   const sessionSelect = `
     SELECT
       s.*,
       u.username AS account_username,
       u.display_name AS account_display_name,
+      u.bio AS account_bio,
+      u.avatar_storage_name AS account_avatar_storage_name,
+      u.avatar_media_type AS account_avatar_media_type,
       u.role AS account_role,
       u.status AS account_status,
+      u.updated_at AS account_updated_at,
+      u.deleted_at AS account_deleted_at,
       u.created_at AS account_created_at
     FROM sessions AS s
     JOIN users AS u ON u.id = s.user_id
   `;
+  const notificationSelect = `
+    SELECT
+      n.*,
+      CASE
+        WHEN actor.deleted_at IS NULL THEN actor.display_name
+        WHEN actor.id IS NOT NULL THEN '已注销用户'
+        ELSE NULL
+      END AS actor_display_name,
+      v.title AS video_title
+    FROM notifications AS n
+    LEFT JOIN users AS actor ON actor.id = n.actor_user_id
+    LEFT JOIN videos AS v ON v.id = n.video_id
+  `;
 
   const statements = {
-    listVideos: database.prepare(`${videoSelect} WHERE v.validation_status IN ('ready', 'ready_with_warnings') AND v.visibility = 'public' AND v.moderation_status = 'visible' ORDER BY v.created_at DESC, v.id DESC`),
+    listVideos: database.prepare(`${videoSelect} WHERE v.validation_status IN ('ready', 'ready_with_warnings') AND v.visibility = 'public' AND v.moderation_status = 'visible' AND v.withdrawn_at IS NULL AND v.deleted_at IS NULL ORDER BY v.created_at DESC, v.id DESC`),
     getVideo: database.prepare(`${videoSelect} WHERE v.id = ?`),
     insertVideo: database.prepare(`
       INSERT INTO videos (
@@ -463,40 +847,77 @@ export function openDatabase(databasePath) {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `),
     deleteVideo: database.prepare('DELETE FROM videos WHERE id = ?'),
-    nextPendingVideo: database.prepare(`${videoSelect} WHERE v.validation_status = 'pending' ORDER BY v.created_at ASC, v.id ASC LIMIT 1`),
+    nextPendingVideo: database.prepare(`${videoSelect} WHERE v.validation_status = 'pending' AND v.deleted_at IS NULL ORDER BY v.created_at ASC, v.id ASC LIMIT 1`),
     markVideoValidating: database.prepare(`
       UPDATE videos
       SET validation_status = 'validating', validation_started_at = ?, validation_summary = '{}'
-      WHERE id = ? AND validation_status = 'pending'
+      WHERE id = ? AND validation_status = 'pending' AND deleted_at IS NULL
     `),
     resetStaleValidations: database.prepare(`
       UPDATE videos
       SET validation_status = 'pending', validation_started_at = NULL
-      WHERE validation_status = 'validating' AND validation_started_at < ?
+      WHERE validation_status = 'validating' AND validation_started_at < ? AND deleted_at IS NULL
     `),
     retryFailedValidations: database.prepare(`
       UPDATE videos
       SET validation_status = 'pending', validation_started_at = NULL
-      WHERE validation_status = 'validation_failed'
+      WHERE validation_status = 'validation_failed' AND deleted_at IS NULL
     `),
     completeVideoValidation: database.prepare(`
       UPDATE videos
       SET media_type = ?, container = ?, video_codec = ?, audio_codec = ?, playback_strategy = ?,
           sha256 = ?, duration_seconds = ?, width = ?, height = ?, frame_rate = ?,
           validation_status = ?, validation_warning_count = ?, validation_summary = ?, validated_at = ?
-      WHERE id = ? AND validation_status = 'validating'
+      WHERE id = ? AND validation_status = 'validating' AND validation_started_at = ? AND deleted_at IS NULL
     `),
     setVideoCover: database.prepare(`
-      UPDATE videos SET cover_storage_name = ?, cover_media_type = ?, cover_source = ? WHERE id = ?
+      UPDATE videos SET cover_storage_name = ?, cover_media_type = ?, cover_source = ? WHERE id = ? AND deleted_at IS NULL
+    `),
+    setClaimedVideoCover: database.prepare(`
+      UPDATE videos SET cover_storage_name = ?, cover_media_type = ?, cover_source = ?
+      WHERE id = ? AND validation_status = 'validating'
+        AND validation_started_at = ? AND deleted_at IS NULL
+    `),
+    renewVideoValidationLease: database.prepare(`
+      UPDATE videos SET validation_started_at = ?
+      WHERE id = ? AND validation_status = 'validating'
+        AND validation_started_at = ? AND deleted_at IS NULL
     `),
     finishVideoValidationFailure: database.prepare(`
       UPDATE videos
       SET validation_status = ?, validation_warning_count = ?, validation_summary = ?, validated_at = ?
       WHERE id = ? AND validation_status = 'validating'
+        AND validation_started_at = ? AND deleted_at IS NULL
     `),
-    allStorageNames: database.prepare('SELECT storage_name FROM videos'),
-    allCoverStorageNames: database.prepare('SELECT cover_storage_name FROM videos WHERE cover_storage_name IS NOT NULL'),
-    videosMissingCover: database.prepare(`${videoSelect} WHERE v.cover_storage_name IS NULL AND v.validation_status IN ('ready', 'ready_with_warnings') ORDER BY v.created_at ASC, v.id ASC`),
+    allStorageNames: database.prepare('SELECT storage_name FROM videos WHERE deleted_at IS NULL'),
+    allCoverStorageNames: database.prepare('SELECT cover_storage_name FROM videos WHERE cover_storage_name IS NOT NULL AND deleted_at IS NULL'),
+    allAvatarStorageNames: database.prepare(`
+      SELECT avatar_storage_name FROM users
+      WHERE avatar_storage_name IS NOT NULL AND deleted_at IS NULL
+    `),
+    activeUser: database.prepare(`
+      SELECT id FROM users WHERE id = ? AND status = 'active' AND deleted_at IS NULL
+    `),
+    writablePublicVideo: database.prepare(`
+      SELECT id FROM videos
+      WHERE id = ? AND validation_status IN ('ready', 'ready_with_warnings')
+        AND visibility = 'public' AND moderation_status = 'visible'
+        AND withdrawn_at IS NULL AND deleted_at IS NULL
+    `),
+    writablePublicDiscussion: database.prepare(`
+      SELECT d.id
+      FROM discussions AS d
+      JOIN videos AS v ON v.id = d.video_id
+      WHERE d.id = ? AND d.deleted_at IS NULL
+        AND v.validation_status IN ('ready', 'ready_with_warnings')
+        AND v.visibility = 'public' AND v.moderation_status = 'visible'
+        AND v.withdrawn_at IS NULL AND v.deleted_at IS NULL
+    `),
+    writableDiscussionParent: database.prepare(`
+      SELECT id FROM discussions
+      WHERE id = ? AND video_id = ? AND deleted_at IS NULL
+    `),
+    videosMissingCover: database.prepare(`${videoSelect} WHERE v.cover_storage_name IS NULL AND v.deleted_at IS NULL AND v.validation_status IN ('ready', 'ready_with_warnings') ORDER BY v.created_at ASC, v.id ASC`),
     listDiscussions: database.prepare(`${discussionSelect} WHERE d.video_id = ? ORDER BY d.created_at ASC, d.id ASC`),
     insertDiscussion: database.prepare(`
       INSERT INTO discussions (video_id, nickname, body_markdown, user_id, title, parent_id, created_at)
@@ -505,7 +926,7 @@ export function openDatabase(databasePath) {
     getDiscussion: database.prepare(`${discussionSelect} WHERE d.id = ?`),
     listCategories: database.prepare(`
       SELECT c.*, p.slug AS parent_slug, p.name AS parent_name,
-        (SELECT count(*) FROM videos AS v WHERE (v.category_id = c.id OR v.category_id IN (SELECT child.id FROM categories AS child WHERE child.parent_id = c.id)) AND v.validation_status IN ('ready', 'ready_with_warnings') AND v.visibility = 'public' AND v.moderation_status = 'visible') AS video_count
+        (SELECT count(*) FROM videos AS v WHERE (v.category_id = c.id OR v.category_id IN (SELECT child.id FROM categories AS child WHERE child.parent_id = c.id)) AND v.validation_status IN ('ready', 'ready_with_warnings') AND v.visibility = 'public' AND v.moderation_status = 'visible' AND v.withdrawn_at IS NULL AND v.deleted_at IS NULL) AS video_count
       FROM categories AS c
       LEFT JOIN categories AS p ON p.id = c.parent_id
       WHERE c.is_active = 1
@@ -517,7 +938,7 @@ export function openDatabase(databasePath) {
       FROM tags AS t
       JOIN video_tags AS vt ON vt.tag_id = t.id
       JOIN videos AS v ON v.id = vt.video_id
-      WHERE v.validation_status IN ('ready', 'ready_with_warnings') AND v.visibility = 'public' AND v.moderation_status = 'visible'
+      WHERE v.validation_status IN ('ready', 'ready_with_warnings') AND v.visibility = 'public' AND v.moderation_status = 'visible' AND v.withdrawn_at IS NULL AND v.deleted_at IS NULL
       GROUP BY t.id, t.slug, t.name
       ORDER BY video_count DESC, t.name COLLATE NOCASE ASC
     `),
@@ -537,22 +958,411 @@ export function openDatabase(databasePath) {
     `),
     deleteDiscussionVote: database.prepare('DELETE FROM discussion_votes WHERE discussion_id = ? AND user_id = ?'),
     createUser: database.prepare(`
-      INSERT INTO users (id, username, display_name, password_hash, created_at)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO users (id, username, display_name, password_hash, bio, updated_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `),
     getUserById: database.prepare('SELECT * FROM users WHERE id = ?'),
     findUserByUsername: database.prepare('SELECT * FROM users WHERE username = ? COLLATE NOCASE'),
+    updateUserProfile: database.prepare(`
+      UPDATE users SET display_name = ?, bio = ?, updated_at = ?
+      WHERE id = ? AND status = 'active' AND deleted_at IS NULL
+    `),
+    updateUserAvatar: database.prepare(`
+      UPDATE users SET avatar_storage_name = ?, avatar_media_type = ?, updated_at = ?
+      WHERE id = ? AND status = 'active' AND deleted_at IS NULL
+    `),
+    updateUserPassword: database.prepare(`
+      UPDATE users SET password_hash = ?, updated_at = ?
+      WHERE id = ? AND status = 'active' AND deleted_at IS NULL
+    `),
+    publicUserProfile: database.prepare(`
+      SELECT
+        u.id, u.username, u.display_name, u.bio, u.avatar_storage_name, u.avatar_media_type,
+        u.created_at, u.updated_at,
+        (SELECT count(*) FROM videos AS v
+          WHERE v.user_id = u.id AND v.validation_status IN ('ready', 'ready_with_warnings')
+            AND v.visibility = 'public' AND v.moderation_status = 'visible'
+            AND v.withdrawn_at IS NULL AND v.deleted_at IS NULL) AS video_count,
+        (SELECT count(*) FROM discussions AS d
+          JOIN videos AS v ON v.id = d.video_id
+          WHERE d.user_id = u.id AND d.deleted_at IS NULL
+            AND v.validation_status IN ('ready', 'ready_with_warnings')
+            AND v.visibility = 'public' AND v.moderation_status = 'visible'
+            AND v.withdrawn_at IS NULL AND v.deleted_at IS NULL) AS discussion_count,
+        (SELECT count(*) FROM video_votes AS vv
+          JOIN videos AS v ON v.id = vv.video_id
+          WHERE v.user_id = u.id AND vv.value = 1
+            AND v.validation_status IN ('ready', 'ready_with_warnings')
+            AND v.visibility = 'public' AND v.moderation_status = 'visible'
+            AND v.withdrawn_at IS NULL AND v.deleted_at IS NULL) AS received_upvote_count,
+        (SELECT count(*) FROM video_votes AS vv
+          JOIN videos AS v ON v.id = vv.video_id
+          WHERE v.user_id = u.id AND vv.value = -1
+            AND v.validation_status IN ('ready', 'ready_with_warnings')
+            AND v.visibility = 'public' AND v.moderation_status = 'visible'
+            AND v.withdrawn_at IS NULL AND v.deleted_at IS NULL) AS received_downvote_count
+      FROM users AS u
+      WHERE u.username = ? COLLATE NOCASE AND u.status = 'active' AND u.deleted_at IS NULL
+    `),
+    withdrawVideo: database.prepare(`
+      UPDATE videos
+      SET archive_public = CASE
+            WHEN validation_status IN ('ready', 'ready_with_warnings')
+              AND visibility = 'public' AND moderation_status = 'visible' THEN 1
+            ELSE 0
+          END,
+          visibility = 'private', withdrawn_at = ?
+      WHERE id = ? AND user_id = ? AND withdrawn_at IS NULL AND deleted_at IS NULL
+        AND EXISTS (
+          SELECT 1 FROM users AS owner
+          WHERE owner.id = videos.user_id AND owner.status = 'active' AND owner.deleted_at IS NULL
+        )
+    `),
+    republishVideo: database.prepare(`
+      UPDATE videos SET visibility = 'public', withdrawn_at = NULL
+      WHERE id = ? AND user_id = ? AND withdrawn_at IS NOT NULL AND deleted_at IS NULL
+        AND validation_status IN ('ready', 'ready_with_warnings')
+        AND moderation_status = 'visible'
+        AND EXISTS (
+          SELECT 1 FROM users AS owner
+          WHERE owner.id = videos.user_id AND owner.status = 'active' AND owner.deleted_at IS NULL
+        )
+    `),
+    getOwnedVideoDeletionSource: database.prepare(`
+      SELECT v.id, v.title, v.storage_name, v.cover_storage_name, v.validation_status
+      FROM videos AS v
+      JOIN users AS owner ON owner.id = v.user_id
+      WHERE v.id = ? AND v.user_id = ? AND v.withdrawn_at IS NOT NULL AND v.deleted_at IS NULL
+        AND owner.status = 'active' AND owner.deleted_at IS NULL
+    `),
+    markVideoDeleted: database.prepare(`
+      UPDATE videos
+      SET archive_public = CASE
+            WHEN validation_status IN ('ready', 'ready_with_warnings')
+              AND moderation_status = 'visible'
+              AND (archive_public = 1 OR visibility = 'public') THEN 1
+            ELSE 0
+          END,
+          title = '作品已删除', creator = '已注销用户', description = '',
+          storage_name = ?, original_filename = '已删除', byte_size = 1,
+          validation_summary = '{}', sha256 = NULL, duration_seconds = NULL,
+          width = NULL, height = NULL, frame_rate = NULL,
+          source_container = NULL, source_video_codec = NULL, source_audio_codec = NULL,
+          user_id = NULL, category_id = NULL, cover_storage_name = NULL,
+          cover_media_type = NULL, cover_source = NULL, visibility = 'private',
+          moderation_status = 'removed', withdrawn_at = COALESCE(withdrawn_at, ?), deleted_at = ?
+      WHERE id = ? AND deleted_at IS NULL
+    `),
+    enqueueFileDeletion: database.prepare(`
+      INSERT INTO file_deletion_queue (
+        kind, storage_name, attempt_count, last_error, next_attempt_at, created_at, updated_at
+      ) VALUES (?, ?, 0, NULL, ?, ?, ?)
+      ON CONFLICT(kind, storage_name) DO NOTHING
+    `),
+    getFileDeletionByTarget: database.prepare(`
+      SELECT * FROM file_deletion_queue WHERE kind = ? AND storage_name = ?
+    `),
+    getFileDeletionById: database.prepare('SELECT * FROM file_deletion_queue WHERE id = ?'),
+    listFileDeletionTargets: database.prepare(`
+      SELECT kind, storage_name FROM file_deletion_queue ORDER BY id ASC
+    `),
+    completeFileDeletion: database.prepare('DELETE FROM file_deletion_queue WHERE id = ?'),
+    failFileDeletion: database.prepare(`
+      UPDATE file_deletion_queue
+      SET attempt_count = attempt_count + 1, last_error = ?,
+          next_attempt_at = ?, updated_at = ?
+      WHERE id = ?
+    `),
+    getNotificationPreferences: database.prepare('SELECT * FROM notification_preferences WHERE user_id = ?'),
+    updateNotificationPreferences: database.prepare(`
+      INSERT INTO notification_preferences (user_id, reply, video_vote, system, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(user_id) DO UPDATE SET
+        reply = excluded.reply, video_vote = excluded.video_vote,
+        system = excluded.system, updated_at = excluded.updated_at
+    `),
+    replyNotificationTarget: database.prepare(`
+      SELECT parent.user_id AS recipient_user_id, reply.video_id
+      FROM discussions AS reply
+      JOIN discussions AS parent ON parent.id = reply.parent_id
+      JOIN users AS actor ON actor.id = reply.user_id
+      JOIN users AS recipient ON recipient.id = parent.user_id
+      LEFT JOIN notification_preferences AS preference ON preference.user_id = recipient.id
+      WHERE reply.id = ? AND reply.user_id = ? AND parent.deleted_at IS NULL
+        AND reply.deleted_at IS NULL
+        AND actor.status = 'active' AND actor.deleted_at IS NULL
+        AND recipient.status = 'active' AND recipient.deleted_at IS NULL
+        AND COALESCE(preference.reply, 1) = 1
+    `),
+    videoVoteNotificationTarget: database.prepare(`
+      SELECT v.user_id AS recipient_user_id
+      FROM videos AS v
+      JOIN users AS recipient ON recipient.id = v.user_id
+      LEFT JOIN notification_preferences AS preference ON preference.user_id = recipient.id
+      WHERE v.id = ? AND v.deleted_at IS NULL
+        AND recipient.status = 'active' AND recipient.deleted_at IS NULL
+        AND COALESCE(preference.video_vote, 1) = 1
+    `),
+    systemNotificationTarget: database.prepare(`
+      SELECT u.id
+      FROM users AS u
+      LEFT JOIN notification_preferences AS preference ON preference.user_id = u.id
+      WHERE u.id = ? AND u.status = 'active' AND u.deleted_at IS NULL
+        AND COALESCE(preference.system, 1) = 1
+    `),
+    insertReplyNotification: database.prepare(`
+      INSERT OR IGNORE INTO notifications (
+        recipient_user_id, type, actor_user_id, video_id, discussion_id,
+        event_count, is_read, created_at, updated_at
+      ) VALUES (?, 'reply', ?, ?, ?, 1, 0, ?, ?)
+    `),
+    insertVoteNotification: database.prepare(`
+      INSERT INTO notifications (
+        recipient_user_id, type, actor_user_id, video_id,
+        event_count, is_read, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, 1, 0, ?, ?)
+    `),
+    insertNotificationVoteActor: database.prepare(`
+      INSERT OR IGNORE INTO notification_vote_actors (
+        notification_id, actor_user_id, value, created_at
+      ) VALUES (?, ?, ?, ?)
+    `),
+    findUnreadNotificationVoteActor: database.prepare(`
+      SELECT n.id, n.event_count
+      FROM notification_vote_actors AS actor
+      JOIN notifications AS n ON n.id = actor.notification_id
+      WHERE actor.actor_user_id = ? AND actor.value = ?
+        AND n.video_id = ? AND n.type = ? AND n.is_read = 0
+      ORDER BY n.id DESC
+      LIMIT 1
+    `),
+    deleteNotificationVoteActor: database.prepare(`
+      DELETE FROM notification_vote_actors
+      WHERE notification_id = ? AND actor_user_id = ?
+    `),
+    insertSystemNotification: database.prepare(`
+      INSERT INTO notifications (
+        recipient_user_id, type, event_count, is_read,
+        system_title, system_body, system_link, created_at, updated_at
+      ) VALUES (?, 'system', 1, 0, ?, ?, ?, ?, ?)
+    `),
+    getNotification: database.prepare(`${notificationSelect} WHERE n.id = ?`),
+    getReplyNotification: database.prepare(`${notificationSelect} WHERE n.type = 'reply' AND n.discussion_id = ?`),
+    unreadNotificationCount: database.prepare(`
+      SELECT count(*) AS count FROM notifications WHERE recipient_user_id = ? AND is_read = 0
+    `),
+    markNotificationRead: database.prepare(`
+      UPDATE notifications SET is_read = 1, read_at = ?, updated_at = ?
+      WHERE id = ? AND recipient_user_id = ? AND is_read = 0
+    `),
+    markAllNotificationsRead: database.prepare(`
+      UPDATE notifications SET is_read = 1, read_at = ?, updated_at = ?
+      WHERE recipient_user_id = ? AND is_read = 0
+    `),
     createSession: database.prepare(`
       INSERT INTO sessions (token_hash, user_id, csrf_token_hash, created_at, expires_at)
       VALUES (?, ?, ?, ?, ?)
     `),
     getSession: database.prepare(`${sessionSelect} WHERE s.token_hash = ?`),
-    findSession: database.prepare(`${sessionSelect} WHERE s.token_hash = ? AND s.expires_at > ?`),
+    findSession: database.prepare(`${sessionSelect} WHERE s.token_hash = ? AND s.expires_at > ? AND u.status = 'active' AND u.deleted_at IS NULL`),
     updateSessionCsrfToken: database.prepare('UPDATE sessions SET csrf_token_hash = ? WHERE token_hash = ?'),
     revokeSession: database.prepare('DELETE FROM sessions WHERE token_hash = ?'),
+    revokeOtherSessions: database.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?'),
+    revokeAllUserSessions: database.prepare('DELETE FROM sessions WHERE user_id = ?'),
     cleanupExpiredSessions: database.prepare('DELETE FROM sessions WHERE expires_at <= ?'),
     health: database.prepare('SELECT 1 AS ok')
   };
+
+  function inImmediateTransaction(action) {
+    database.exec('BEGIN IMMEDIATE');
+    try {
+      const result = action();
+      database.exec('COMMIT');
+      return result;
+    } catch (error) {
+      database.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  function cleanupEmptyDiscussionTombstones(startId) {
+    let currentId = startId;
+    while (currentId !== null && currentId !== undefined) {
+      const row = database.prepare(`
+        SELECT d.parent_id, d.deleted_at,
+          (SELECT count(*) FROM discussions AS child WHERE child.parent_id = d.id) AS child_count
+        FROM discussions AS d WHERE d.id = ?
+      `).get(currentId);
+      if (!row || row.deleted_at === null || row.child_count > 0) break;
+      database.prepare(`
+        DELETE FROM notifications WHERE type = 'reply' AND discussion_id = ?
+      `).run(currentId);
+      database.prepare('DELETE FROM discussions WHERE id = ?').run(currentId);
+      currentId = row.parent_id;
+    }
+  }
+
+  function deleteOwnedDiscussionInsideTransaction(id, userId, deletedAt) {
+    if (!statements.activeUser.get(userId)) return null;
+    const row = database.prepare(`
+      SELECT id, parent_id, user_id, deleted_at,
+        (SELECT count(*) FROM discussions AS child WHERE child.parent_id = discussions.id) AS child_count
+      FROM discussions WHERE id = ?
+    `).get(id);
+    if (!row || row.user_id !== userId || row.deleted_at !== null) return null;
+    database.prepare(`
+      DELETE FROM notifications WHERE type = 'reply' AND discussion_id = ?
+    `).run(id);
+    if (row.child_count === 0) {
+      database.prepare('DELETE FROM discussions WHERE id = ?').run(id);
+      cleanupEmptyDiscussionTombstones(row.parent_id);
+      return { id, mode: 'deleted' };
+    }
+    database.prepare(`
+      UPDATE discussions
+      SET nickname = '已删除用户', body_markdown = '', user_id = NULL,
+          title = NULL, edited_at = NULL, edit_count = 0, deleted_at = ?
+      WHERE id = ?
+    `).run(deletedAt, id);
+    database.prepare('DELETE FROM discussion_votes WHERE discussion_id = ?').run(id);
+    return { id, mode: 'tombstoned' };
+  }
+
+  function enqueueFileDeletionInsideTransaction(kind, storageName, createdAt) {
+    validateFileDeletionTarget(kind, storageName);
+    if (typeof createdAt !== 'string' || createdAt.length === 0) {
+      throw new TypeError('文件删除任务时间不能为空');
+    }
+    statements.enqueueFileDeletion.run(kind, storageName, createdAt, createdAt, createdAt);
+    return mapFileDeletion(statements.getFileDeletionByTarget.get(kind, storageName));
+  }
+
+  function markVideoDeletedInsideTransaction(row, deletedAt) {
+    const tombstoneStorageName = `__deleted__${row.id}`;
+    const changed = statements.markVideoDeleted.run(
+      tombstoneStorageName,
+      deletedAt,
+      deletedAt,
+      row.id
+    ).changes;
+    if (changed !== 1) return null;
+    database.prepare('DELETE FROM video_votes WHERE video_id = ?').run(row.id);
+    database.prepare('DELETE FROM video_tags WHERE video_id = ?').run(row.id);
+    database.prepare(`
+      DELETE FROM notifications
+      WHERE video_id = ? AND type IN ('video_upvote', 'video_downvote')
+    `).run(row.id);
+    enqueueFileDeletionInsideTransaction('video', row.storage_name, deletedAt);
+    if (row.cover_storage_name) {
+      enqueueFileDeletionInsideTransaction('cover', row.cover_storage_name, deletedAt);
+    }
+    return {
+      videoId: row.id,
+      title: row.title,
+      storageName: row.storage_name,
+      coverStorageName: row.cover_storage_name ?? null,
+      validationStatus: row.validation_status
+    };
+  }
+
+  function createReplyNotificationInsideTransaction(replyDiscussionId, actorUserId, createdAt) {
+    if (
+      !statements.activeUser.get(actorUserId)
+      || !statements.writablePublicDiscussion.get(replyDiscussionId)
+    ) return null;
+    const target = statements.replyNotificationTarget.get(replyDiscussionId, actorUserId);
+    if (!target || target.recipient_user_id === actorUserId) return null;
+    statements.insertReplyNotification.run(
+      target.recipient_user_id,
+      actorUserId,
+      target.video_id,
+      replyDiscussionId,
+      createdAt,
+      createdAt
+    );
+    return mapNotification(statements.getReplyNotification.get(replyDiscussionId));
+  }
+
+  function removeActorFromUnreadVoteNotification(videoId, actorUserId, value, changedAt) {
+    if (value !== 1 && value !== -1) return;
+    const type = value === 1 ? 'video_upvote' : 'video_downvote';
+    const existing = statements.findUnreadNotificationVoteActor.get(
+      actorUserId,
+      value,
+      videoId,
+      type
+    );
+    if (!existing) return;
+    if (statements.deleteNotificationVoteActor.run(existing.id, actorUserId).changes !== 1) return;
+    if (existing.event_count <= 1) {
+      database.prepare('DELETE FROM notifications WHERE id = ?').run(existing.id);
+      return;
+    }
+    database.prepare(`
+      UPDATE notifications
+      SET event_count = event_count - 1,
+          actor_user_id = (
+            SELECT actor_user_id FROM notification_vote_actors
+            WHERE notification_id = ?
+            ORDER BY created_at DESC, actor_user_id ASC
+            LIMIT 1
+          ),
+          updated_at = ?
+      WHERE id = ?
+    `).run(existing.id, changedAt, existing.id);
+  }
+
+  function createVideoVoteNotificationInsideTransaction(
+    videoId,
+    actorUserId,
+    value,
+    createdAt,
+    previousValue = 0
+  ) {
+    if (!statements.activeUser.get(actorUserId) || !statements.writablePublicVideo.get(videoId)) {
+      return null;
+    }
+    if (previousValue !== value) {
+      removeActorFromUnreadVoteNotification(videoId, actorUserId, previousValue, createdAt);
+    }
+    if (value !== 1 && value !== -1) return null;
+    const target = statements.videoVoteNotificationTarget.get(videoId);
+    if (!target || target.recipient_user_id === actorUserId) return null;
+    const type = value === 1 ? 'video_upvote' : 'video_downvote';
+    const existing = database.prepare(`
+      SELECT id FROM notifications
+      WHERE recipient_user_id = ? AND type = ? AND video_id = ? AND is_read = 0
+    `).get(target.recipient_user_id, type, videoId);
+    let notificationId;
+    if (existing) {
+      const actorInserted = statements.insertNotificationVoteActor.run(
+        existing.id,
+        actorUserId,
+        value,
+        createdAt
+      ).changes;
+      if (actorInserted === 1) {
+        database.prepare(`
+          UPDATE notifications
+          SET actor_user_id = ?, event_count = event_count + 1, updated_at = ?
+          WHERE id = ?
+        `).run(actorUserId, createdAt, existing.id);
+      }
+      notificationId = existing.id;
+    } else {
+      const result = statements.insertVoteNotification.run(
+        target.recipient_user_id,
+        type,
+        actorUserId,
+        videoId,
+        createdAt,
+        createdAt
+      );
+      notificationId = result.lastInsertRowid;
+      statements.insertNotificationVoteActor.run(notificationId, actorUserId, value, createdAt);
+    }
+    return mapNotification(statements.getNotification.get(notificationId));
+  }
 
   return {
     raw: database,
@@ -570,7 +1380,9 @@ export function openDatabase(databasePath) {
       const clauses = [
         "v.validation_status IN ('ready', 'ready_with_warnings')",
         "v.visibility = 'public'",
-        "v.moderation_status = 'visible'"
+        "v.moderation_status = 'visible'",
+        'v.withdrawn_at IS NULL',
+        'v.deleted_at IS NULL'
       ];
       const values = [];
       if (query) {
@@ -618,6 +1430,10 @@ export function openDatabase(databasePath) {
         : null);
       database.exec('BEGIN IMMEDIATE');
       try {
+        if (video.userId !== undefined && video.userId !== null && !statements.activeUser.get(video.userId)) {
+          database.exec('COMMIT');
+          return null;
+        }
         statements.insertVideo.run(
           video.id,
           video.title,
@@ -692,7 +1508,8 @@ export function openDatabase(databasePath) {
     retryFailedValidations() {
       return statements.retryFailedValidations.run().changes;
     },
-    completeVideoValidation(id, result, validatedAt) {
+    completeVideoValidation(id, result, validatedAt, claimStartedAt) {
+      if (typeof claimStartedAt !== 'string' || claimStartedAt.length === 0) return 0;
       const status = result.warningCount > 0 ? 'ready_with_warnings' : 'ready';
       return statements.completeVideoValidation.run(
         result.mediaType,
@@ -709,20 +1526,58 @@ export function openDatabase(databasePath) {
         result.warningCount,
         JSON.stringify(result.summary ?? {}),
         validatedAt,
-        id
+        id,
+        claimStartedAt
       ).changes;
     },
-    setVideoCover(id, { storageName, mediaType, source }) {
+    setVideoCover(id, { storageName, mediaType, source }, claimStartedAt = null) {
+      if (claimStartedAt !== null) {
+        return statements.setClaimedVideoCover.run(
+          storageName,
+          mediaType,
+          source,
+          id,
+          claimStartedAt
+        ).changes;
+      }
       return statements.setVideoCover.run(storageName, mediaType, source, id).changes;
     },
-    rejectVideoValidation(id, summary, validatedAt, warningCount = 0) {
-      return statements.finishVideoValidationFailure.run(
-        'rejected', warningCount, JSON.stringify(summary ?? {}), validatedAt, id
-      ).changes;
+    renewVideoValidationLease(id, claimStartedAt, renewedAt) {
+      if (
+        typeof claimStartedAt !== 'string' || claimStartedAt.length === 0
+        || typeof renewedAt !== 'string' || renewedAt.length === 0
+      ) return 0;
+      return statements.renewVideoValidationLease.run(renewedAt, id, claimStartedAt).changes;
     },
-    failVideoValidation(id, summary, validatedAt) {
+    rejectVideoValidation(id, summary, validatedAt, claimStartedAt, warningCount = 0) {
+      if (typeof claimStartedAt !== 'string' || claimStartedAt.length === 0) return 0;
+      return inImmediateTransaction(() => {
+        const asset = database.prepare(`
+          SELECT storage_name, cover_storage_name FROM videos
+          WHERE id = ? AND validation_status = 'validating'
+            AND validation_started_at = ? AND deleted_at IS NULL
+        `).get(id, claimStartedAt);
+        if (!asset) return 0;
+        const changed = statements.finishVideoValidationFailure.run(
+          'rejected', warningCount, JSON.stringify(summary ?? {}), validatedAt, id, claimStartedAt
+        ).changes;
+        if (changed !== 1) return 0;
+        database.prepare(`
+          UPDATE videos
+          SET cover_storage_name = NULL, cover_media_type = NULL, cover_source = NULL
+          WHERE id = ?
+        `).run(id);
+        enqueueFileDeletionInsideTransaction('video', asset.storage_name, validatedAt);
+        if (asset.cover_storage_name) {
+          enqueueFileDeletionInsideTransaction('cover', asset.cover_storage_name, validatedAt);
+        }
+        return 1;
+      });
+    },
+    failVideoValidation(id, summary, validatedAt, claimStartedAt) {
+      if (typeof claimStartedAt !== 'string' || claimStartedAt.length === 0) return 0;
       return statements.finishVideoValidationFailure.run(
-        'validation_failed', 0, JSON.stringify(summary ?? {}), validatedAt, id
+        'validation_failed', 0, JSON.stringify(summary ?? {}), validatedAt, id, claimStartedAt
       ).changes;
     },
     listVideoStorageNames() {
@@ -731,8 +1586,111 @@ export function openDatabase(databasePath) {
     listCoverStorageNames() {
       return statements.allCoverStorageNames.all().map((row) => row.cover_storage_name);
     },
+    listAvatarStorageNames() {
+      return statements.allAvatarStorageNames.all().map((row) => row.avatar_storage_name);
+    },
+    listFileDeletionTargets() {
+      return statements.listFileDeletionTargets.all().map((row) => ({
+        kind: row.kind,
+        storageName: row.storage_name
+      }));
+    },
     listVideosMissingCover() {
       return statements.videosMissingCover.all().map(mapVideo);
+    },
+    enqueueFileDeletion({ kind, storageName, createdAt = new Date().toISOString() }) {
+      return inImmediateTransaction(() => enqueueFileDeletionInsideTransaction(
+        kind,
+        storageName,
+        createdAt
+      ));
+    },
+    listPendingFileDeletions(options = {}) {
+      const limit = Number.isSafeInteger(options.limit)
+        ? Math.min(Math.max(options.limit, 1), MAX_PAGE_SIZE)
+        : MAX_PAGE_SIZE;
+      let eligibleAt = null;
+      if (options.eligibleAt !== undefined && options.eligibleAt !== null) {
+        const eligibleAtMs = Date.parse(options.eligibleAt);
+        if (!Number.isFinite(eligibleAtMs)) {
+          throw new TypeError('文件删除任务查询时间必须是有效时间');
+        }
+        eligibleAt = new Date(eligibleAtMs).toISOString();
+      }
+      const eligibleClause = eligibleAt === null ? '' : 'WHERE next_attempt_at <= ?';
+      const values = eligibleAt === null ? [limit] : [eligibleAt, limit];
+      return database.prepare(`
+        SELECT * FROM file_deletion_queue
+        ${eligibleClause}
+        ORDER BY CASE WHEN attempt_count = 0 THEN 0 ELSE 1 END ASC,
+          updated_at ASC, id ASC
+        LIMIT ?
+      `).all(...values).map(mapFileDeletion);
+    },
+    completeFileDeletion(id) {
+      return statements.completeFileDeletion.run(id).changes;
+    },
+    failFileDeletion(id, error, updatedAt = new Date().toISOString()) {
+      const rawMessage = error instanceof Error ? error.message : String(error ?? '未知删除错误');
+      const message = (rawMessage || '未知删除错误').slice(0, MAX_FILE_DELETION_ERROR_LENGTH);
+      return inImmediateTransaction(() => {
+        const current = statements.getFileDeletionById.get(id);
+        if (!current) return null;
+        const nextAttemptAt = nextFileDeletionAttemptAt(updatedAt, current.attempt_count + 1);
+        const changed = statements.failFileDeletion.run(
+          message,
+          nextAttemptAt,
+          updatedAt,
+          id
+        ).changes;
+        return changed === 1 ? mapFileDeletion(statements.getFileDeletionById.get(id)) : null;
+      });
+    },
+    listUserVideos(userId, options = {}) {
+      const { limit, offset } = normalizePagination(options);
+      const items = database.prepare(`
+        ${videoSelect}
+        WHERE v.user_id = ?
+        ORDER BY v.created_at DESC, v.id DESC
+        LIMIT ? OFFSET ?
+      `).all(userId, limit, offset).map(mapVideo);
+      const total = database.prepare('SELECT count(*) AS count FROM videos WHERE user_id = ?')
+        .get(userId).count;
+      return { items, total, limit, offset };
+    },
+    listPublicUserVideos(userId, options = {}) {
+      const { limit, offset } = normalizePagination(options);
+      const publicWhere = `
+        v.user_id = ? AND v.validation_status IN ('ready', 'ready_with_warnings')
+        AND v.visibility = 'public' AND v.moderation_status = 'visible'
+        AND v.withdrawn_at IS NULL AND v.deleted_at IS NULL
+      `;
+      const items = database.prepare(`
+        ${videoSelect} WHERE ${publicWhere}
+        ORDER BY v.created_at DESC, v.id DESC LIMIT ? OFFSET ?
+      `).all(userId, limit, offset).map(mapVideo);
+      const total = database.prepare(`SELECT count(*) AS count FROM videos AS v WHERE ${publicWhere}`)
+        .get(userId).count;
+      return { items, total, limit, offset };
+    },
+    withdrawVideo(id, userId, withdrawnAt) {
+      return inImmediateTransaction(() => {
+        const changed = statements.withdrawVideo.run(withdrawnAt, id, userId).changes;
+        return changed === 1 ? this.getVideo(id, userId) : null;
+      });
+    },
+    republishVideo(id, userId) {
+      return inImmediateTransaction(() => {
+        const changed = statements.republishVideo.run(id, userId).changes;
+        return changed === 1 ? this.getVideo(id, userId) : null;
+      });
+    },
+    markVideoPermanentlyDeleted(id, userId, deletedAt) {
+      return inImmediateTransaction(() => {
+        const row = statements.getOwnedVideoDeletionSource.get(id, userId);
+        if (!row) return null;
+        return markVideoDeletedInsideTransaction(row, deletedAt);
+      });
     },
     listDiscussions(videoId, viewerUserId = null) {
       return statements.listDiscussions.all(videoId).map((row) => {
@@ -744,16 +1702,29 @@ export function openDatabase(databasePath) {
       });
     },
     insertDiscussion(discussion) {
-      const result = statements.insertDiscussion.run(
-        discussion.videoId,
-        discussion.nickname,
-        discussion.bodyMarkdown,
-        discussion.userId ?? null,
-        discussion.title ?? null,
-        discussion.parentId ?? null,
-        discussion.createdAt
-      );
-      return mapDiscussion(statements.getDiscussion.get(result.lastInsertRowid));
+      return inImmediateTransaction(() => {
+        if (
+          (discussion.userId !== undefined && discussion.userId !== null
+            && !statements.activeUser.get(discussion.userId))
+          || !statements.writablePublicVideo.get(discussion.videoId)
+          || (discussion.parentId !== undefined && discussion.parentId !== null
+            && !statements.writableDiscussionParent.get(discussion.parentId, discussion.videoId))
+        ) return null;
+        const result = statements.insertDiscussion.run(
+          discussion.videoId,
+          discussion.nickname,
+          discussion.bodyMarkdown,
+          discussion.userId ?? null,
+          discussion.title ?? null,
+          discussion.parentId ?? null,
+          discussion.createdAt
+        );
+        const inserted = mapDiscussion(statements.getDiscussion.get(result.lastInsertRowid));
+        if (inserted.parentId !== null && inserted.userId !== null && discussion.notifyParent !== false) {
+          createReplyNotificationInsideTransaction(inserted.id, inserted.userId, discussion.createdAt);
+        }
+        return inserted;
+      });
     },
     getDiscussion(id, viewerUserId = null) {
       const discussion = mapDiscussion(statements.getDiscussion.get(id));
@@ -761,6 +1732,48 @@ export function openDatabase(databasePath) {
         discussion.viewerVote = statements.getDiscussionVote.get(id, viewerUserId)?.value ?? 0;
       }
       return discussion;
+    },
+    listUserDiscussions(userId, options = {}) {
+      const { limit, offset } = normalizePagination(options);
+      const items = database.prepare(`
+        ${discussionSelect}
+        WHERE d.user_id = ? AND d.deleted_at IS NULL
+        ORDER BY d.created_at DESC, d.id DESC
+        LIMIT ? OFFSET ?
+      `).all(userId, limit, offset).map(mapDiscussion);
+      const total = database.prepare(`
+        SELECT count(*) AS count FROM discussions
+        WHERE user_id = ? AND deleted_at IS NULL
+      `).get(userId).count;
+      return { items, total, limit, offset };
+    },
+    editDiscussion(id, userId, changes) {
+      return inImmediateTransaction(() => {
+        const current = database.prepare(`
+          SELECT d.title, d.body_markdown
+          FROM discussions AS d
+          JOIN videos AS v ON v.id = d.video_id
+          JOIN users AS author ON author.id = d.user_id
+          WHERE d.id = ? AND d.user_id = ? AND d.deleted_at IS NULL
+            AND v.deleted_at IS NULL
+            AND author.status = 'active' AND author.deleted_at IS NULL
+        `).get(id, userId);
+        if (!current) return null;
+        const title = changes.title ?? null;
+        const bodyMarkdown = changes.bodyMarkdown;
+        if (current.title === title && current.body_markdown === bodyMarkdown) {
+          return this.getDiscussion(id, userId);
+        }
+        database.prepare(`
+          UPDATE discussions
+          SET title = ?, body_markdown = ?, edited_at = ?, edit_count = edit_count + 1
+          WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+        `).run(title, bodyMarkdown, changes.editedAt, id, userId);
+        return this.getDiscussion(id, userId);
+      });
+    },
+    deleteDiscussion(id, userId, deletedAt) {
+      return inImmediateTransaction(() => deleteOwnedDiscussionInsideTransaction(id, userId, deletedAt));
     },
     listCategories() {
       return statements.listCategories.all().map((row) => ({
@@ -786,25 +1799,62 @@ export function openDatabase(databasePath) {
       const row = statements.getTagBySlug.get(slug);
       return row ? { id: row.id, slug: row.slug, name: row.name } : null;
     },
-    setVideoVote(videoId, userId, value, changedAt) {
-      if (value === 0) statements.deleteVideoVote.run(videoId, userId);
-      else statements.upsertVideoVote.run(videoId, userId, value, changedAt, changedAt);
-      return this.getVideo(videoId, userId);
+    setVideoVote(videoId, userId, value, changedAt, options = {}) {
+      return inImmediateTransaction(() => {
+        if (!statements.activeUser.get(userId)) return null;
+        const previousValue = statements.getVideoVote.get(videoId, userId)?.value ?? 0;
+        if (!statements.writablePublicVideo.get(videoId)) {
+          if (value === 0 && previousValue !== 0) {
+            statements.deleteVideoVote.run(videoId, userId);
+            if (options.notifyOwner !== false) {
+              removeActorFromUnreadVoteNotification(videoId, userId, previousValue, changedAt);
+            }
+          }
+          return null;
+        }
+        if (value === 0) statements.deleteVideoVote.run(videoId, userId);
+        else statements.upsertVideoVote.run(videoId, userId, value, changedAt, changedAt);
+        if (value !== previousValue && options.notifyOwner !== false) {
+          createVideoVoteNotificationInsideTransaction(
+            videoId,
+            userId,
+            value,
+            changedAt,
+            previousValue
+          );
+        }
+        return this.getVideo(videoId, userId);
+      });
     },
     setDiscussionVote(discussionId, userId, value, changedAt) {
-      if (value === 0) statements.deleteDiscussionVote.run(discussionId, userId);
-      else statements.upsertDiscussionVote.run(discussionId, userId, value, changedAt, changedAt);
-      return this.getDiscussion(discussionId, userId);
+      return inImmediateTransaction(() => {
+        if (!statements.activeUser.get(userId)) return null;
+        const previousValue = statements.getDiscussionVote.get(discussionId, userId)?.value ?? 0;
+        if (!statements.writablePublicDiscussion.get(discussionId)) {
+          if (value === 0 && previousValue !== 0) {
+            statements.deleteDiscussionVote.run(discussionId, userId);
+          }
+          return null;
+        }
+        if (value === 0) statements.deleteDiscussionVote.run(discussionId, userId);
+        else statements.upsertDiscussionVote.run(discussionId, userId, value, changedAt, changedAt);
+        return this.getDiscussion(discussionId, userId);
+      });
     },
     createUser(user) {
-      statements.createUser.run(
-        user.id,
-        user.username,
-        user.displayName,
-        user.passwordHash,
-        user.createdAt
-      );
-      return mapUser(statements.getUserById.get(user.id));
+      return inImmediateTransaction(() => {
+        statements.createUser.run(
+          user.id,
+          user.username,
+          user.displayName,
+          user.passwordHash,
+          user.bio ?? '',
+          user.createdAt,
+          user.createdAt
+        );
+        statements.updateNotificationPreferences.run(user.id, 1, 1, 1, user.createdAt);
+        return mapUser(statements.getUserById.get(user.id));
+      });
     },
     getUserById(id) {
       return mapUser(statements.getUserById.get(id));
@@ -812,17 +1862,216 @@ export function openDatabase(databasePath) {
     findUserByUsername(username) {
       return mapUser(statements.findUserByUsername.get(username));
     },
+    updateUserProfile(userId, { displayName, bio, updatedAt }) {
+      const changed = statements.updateUserProfile.run(displayName, bio, updatedAt, userId).changes;
+      return changed === 1 ? mapUser(statements.getUserById.get(userId)) : null;
+    },
+    updateUserAvatar(userId, { storageName, mediaType, updatedAt }) {
+      return inImmediateTransaction(() => {
+        const current = statements.getUserById.get(userId);
+        if (!current || current.status !== 'active' || current.deleted_at !== null) return null;
+        const changed = statements.updateUserAvatar.run(
+          storageName ?? null,
+          mediaType ?? null,
+          updatedAt,
+          userId
+        ).changes;
+        if (changed !== 1) return null;
+        if (current.avatar_storage_name && current.avatar_storage_name !== (storageName ?? null)) {
+          enqueueFileDeletionInsideTransaction('avatar', current.avatar_storage_name, updatedAt);
+        }
+        return {
+          user: mapUser(statements.getUserById.get(userId)),
+          previousAvatarStorageName: current.avatar_storage_name ?? null
+        };
+      });
+    },
+    updateUserPassword(userId, passwordHash, updatedAt) {
+      return statements.updateUserPassword.run(passwordHash, updatedAt, userId).changes;
+    },
+    getPublicUserProfile(username) {
+      const row = statements.publicUserProfile.get(username);
+      if (!row) return null;
+      return {
+        id: row.id,
+        username: row.username,
+        displayName: row.display_name,
+        bio: row.bio,
+        avatarStorageName: row.avatar_storage_name ?? null,
+        avatarMediaType: row.avatar_media_type ?? null,
+        videoCount: row.video_count,
+        discussionCount: row.discussion_count,
+        receivedUpvoteCount: row.received_upvote_count,
+        receivedDownvoteCount: row.received_downvote_count,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at
+      };
+    },
+    getNotificationPreferences(userId) {
+      return mapNotificationPreferences(statements.getNotificationPreferences.get(userId));
+    },
+    updateNotificationPreferences(userId, preferences, updatedAt) {
+      return inImmediateTransaction(() => {
+        if (!statements.activeUser.get(userId)) return null;
+        statements.updateNotificationPreferences.run(
+          userId,
+          preferences.reply ? 1 : 0,
+          preferences.videoVote ? 1 : 0,
+          preferences.system ? 1 : 0,
+          updatedAt
+        );
+        return mapNotificationPreferences(statements.getNotificationPreferences.get(userId));
+      });
+    },
+    createReplyNotification({ replyDiscussionId, actorUserId, createdAt }) {
+      return inImmediateTransaction(() => createReplyNotificationInsideTransaction(
+        replyDiscussionId,
+        actorUserId,
+        createdAt
+      ));
+    },
+    createVideoVoteNotification({ videoId, actorUserId, value, previousValue = 0, createdAt }) {
+      return inImmediateTransaction(() => createVideoVoteNotificationInsideTransaction(
+        videoId,
+        actorUserId,
+        value,
+        createdAt,
+        previousValue
+      ));
+    },
+    createSystemNotification({ recipientUserId, title, body = '', link = null, createdAt }) {
+      return inImmediateTransaction(() => {
+        if (!statements.systemNotificationTarget.get(recipientUserId)) return null;
+        const result = statements.insertSystemNotification.run(
+          recipientUserId,
+          title,
+          body,
+          link,
+          createdAt,
+          createdAt
+        );
+        return mapNotification(statements.getNotification.get(result.lastInsertRowid));
+      });
+    },
+    listNotifications(userId, options = {}) {
+      const { limit, offset } = normalizePagination(options);
+      const unreadOnly = options.unreadOnly === true;
+      const unreadClause = unreadOnly ? ' AND n.is_read = 0' : '';
+      const items = database.prepare(`
+        ${notificationSelect}
+        WHERE n.recipient_user_id = ?${unreadClause}
+        ORDER BY n.created_at DESC, n.id DESC LIMIT ? OFFSET ?
+      `).all(userId, limit, offset).map(mapNotification);
+      const total = database.prepare(`
+        SELECT count(*) AS count FROM notifications
+        WHERE recipient_user_id = ?${unreadOnly ? ' AND is_read = 0' : ''}
+      `).get(userId).count;
+      return {
+        items,
+        total,
+        unreadCount: this.getUnreadNotificationCount(userId),
+        limit,
+        offset
+      };
+    },
+    pollNotifications(userId, options = {}) {
+      const limit = Number.isSafeInteger(options.limit)
+        ? Math.min(Math.max(options.limit, 1), MAX_PAGE_SIZE)
+        : DEFAULT_PAGE_SIZE;
+      return {
+        items: database.prepare(`
+          ${notificationSelect}
+          WHERE n.recipient_user_id = ? AND n.is_read = 0
+          ORDER BY n.updated_at DESC, n.id DESC LIMIT ?
+        `).all(userId, limit).map(mapNotification),
+        unreadCount: this.getUnreadNotificationCount(userId)
+      };
+    },
+    getUnreadNotificationCount(userId) {
+      return database.prepare(`
+        SELECT COALESCE(sum(event_count), 0) AS count
+        FROM notifications WHERE recipient_user_id = ? AND is_read = 0
+      `).get(userId).count;
+    },
+    markNotificationRead(id, userId, readAt) {
+      const changed = statements.markNotificationRead.run(readAt, readAt, id, userId).changes;
+      return changed === 1 ? mapNotification(statements.getNotification.get(id)) : null;
+    },
+    markAllNotificationsRead(userId, readAt) {
+      return statements.markAllNotificationsRead.run(readAt, readAt, userId).changes;
+    },
+    deleteAccount(userId, options) {
+      const deletedAt = options.deletedAt;
+      return inImmediateTransaction(() => {
+        const user = statements.getUserById.get(userId);
+        if (!user || user.status !== 'active' || user.deleted_at !== null) return null;
+        const assets = [];
+        if (options.deleteVideos === true) {
+          const rows = database.prepare(`
+            SELECT id, title, storage_name, cover_storage_name, validation_status
+            FROM videos WHERE user_id = ? AND deleted_at IS NULL
+            ORDER BY id ASC
+          `).all(userId);
+          for (const row of rows) {
+            const asset = markVideoDeletedInsideTransaction(row, deletedAt);
+            if (asset) assets.push(asset);
+          }
+        }
+        if (options.deleteDiscussions === true) {
+          const ids = database.prepare(`
+            SELECT id FROM discussions
+            WHERE user_id = ? AND deleted_at IS NULL
+            ORDER BY id DESC
+          `).all(userId);
+          for (const { id } of ids) deleteOwnedDiscussionInsideTransaction(id, userId, deletedAt);
+        }
+        database.prepare("UPDATE discussions SET nickname = '已注销用户' WHERE user_id = ?").run(userId);
+        const currentVideoVotes = database.prepare(`
+          SELECT video_id, value FROM video_votes WHERE user_id = ?
+        `).all(userId);
+        for (const vote of currentVideoVotes) {
+          removeActorFromUnreadVoteNotification(vote.video_id, userId, vote.value, deletedAt);
+        }
+        database.prepare('DELETE FROM video_votes WHERE user_id = ?').run(userId);
+        database.prepare('DELETE FROM discussion_votes WHERE user_id = ?').run(userId);
+        database.prepare('DELETE FROM notification_vote_actors WHERE actor_user_id = ?').run(userId);
+        database.prepare('DELETE FROM notifications WHERE recipient_user_id = ?').run(userId);
+        database.prepare('UPDATE notifications SET actor_user_id = NULL WHERE actor_user_id = ?').run(userId);
+        database.prepare('DELETE FROM notification_preferences WHERE user_id = ?').run(userId);
+        statements.revokeAllUserSessions.run(userId);
+        if (user.avatar_storage_name) {
+          enqueueFileDeletionInsideTransaction('avatar', user.avatar_storage_name, deletedAt);
+        }
+        database.prepare(`
+          UPDATE users
+          SET display_name = '已注销用户', password_hash = ?, bio = '',
+              avatar_storage_name = NULL, avatar_media_type = NULL,
+              status = 'disabled', updated_at = ?, deleted_at = ?
+          WHERE id = ?
+        `).run(`disabled:${userId}:${deletedAt}`, deletedAt, deletedAt, userId);
+        return {
+          userId,
+          username: user.username,
+          avatarStorageName: user.avatar_storage_name ?? null,
+          assets,
+          deletedAt
+        };
+      });
+    },
     createSession(session) {
       const tokenHash = requireSha256Hash(session.tokenHash, '会话令牌');
       const csrfTokenHash = requireSha256Hash(session.csrfTokenHash, 'CSRF 令牌');
-      statements.createSession.run(
-        tokenHash,
-        session.userId,
-        csrfTokenHash,
-        session.createdAt,
-        session.expiresAt
-      );
-      return mapSession(statements.getSession.get(tokenHash));
+      return inImmediateTransaction(() => {
+        if (!statements.activeUser.get(session.userId)) return null;
+        statements.createSession.run(
+          tokenHash,
+          session.userId,
+          csrfTokenHash,
+          session.createdAt,
+          session.expiresAt
+        );
+        return mapSession(statements.getSession.get(tokenHash));
+      });
     },
     findSessionByTokenHash(tokenHash, nowIso = new Date().toISOString()) {
       if (!SHA256_HEX_PATTERN.test(tokenHash)) return null;
@@ -836,6 +2085,13 @@ export function openDatabase(databasePath) {
     revokeSession(tokenHash) {
       if (!SHA256_HEX_PATTERN.test(tokenHash)) return 0;
       return statements.revokeSession.run(tokenHash).changes;
+    },
+    revokeOtherSessions(userId, currentTokenHash) {
+      const checkedTokenHash = requireSha256Hash(currentTokenHash, '当前会话令牌');
+      return statements.revokeOtherSessions.run(userId, checkedTokenHash).changes;
+    },
+    revokeAllUserSessions(userId) {
+      return statements.revokeAllUserSessions.run(userId).changes;
     },
     cleanupExpiredSessions(nowIso = new Date().toISOString()) {
       return statements.cleanupExpiredSessions.run(nowIso).changes;

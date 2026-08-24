@@ -1,34 +1,56 @@
 <%
-  const author = node.accountDisplayName || node.accountUsername || node.nickname || '历史观众';
+  const deleted = Boolean(node.deletedAt || node.deleted_at);
+  const author = deleted ? '已删除' : (node.accountDisplayName || node.accountUsername || node.nickname || '历史观众');
+  const replies = Array.isArray(node.replies) ? node.replies : [];
   const isTopic = depth === 0;
-  const title = node.title || plainPreview(node.bodyMarkdown).slice(0, 60) || '历史讨论';
+  const readOnlyMode = typeof readOnly !== 'undefined' && Boolean(readOnly);
+  const title = deleted
+    ? '该讨论已由作者删除'
+    : (node.title || plainPreview(node.bodyMarkdown).slice(0, 60) || '历史讨论');
   const nestedDepth = Math.min(depth, 5);
+  const editCount = Math.max(0, Number(node.editCount ?? node.edit_count ?? 0) || 0);
+  const editedAt = node.editedAt || node.edited_at;
+  const authorUsername = deleted ? '' : (node.accountUsername || node.account_username || '');
+  const authorAvatarStorageName = deleted ? '' : (node.accountAvatarStorageName || node.account_avatar_storage_name || '');
+  const isOwner = !deleted && Boolean(user) && (Boolean(node.isOwner || node.is_owner) || (node.userId && user.id && node.userId === user.id));
+  const upvotes = Math.max(0, Number(node.upvoteCount ?? node.upvote_count ?? 0) || 0);
+  const downvotes = Math.max(0, Number(node.downvoteCount ?? node.downvote_count ?? 0) || 0);
 %>
 <% if (isTopic) { %>
-<details class="discussion-thread" id="discussion-<%= node.id %>" data-discussion-details>
+<details class="discussion-thread<% if (deleted) { %> discussion-thread--deleted<% } %>" id="discussion-<%= node.id %>" data-discussion-details>
   <summary>
-    <span class="thread-score" aria-label="净认同数"><%= node.upvoteCount - node.downvoteCount %></span>
-    <span class="thread-summary"><strong><%= title %></strong><small><%= author %> · <%= discussionDate(node.createdAt) %> · <%= node.replies.length %> 条直接回复</small><span><%= plainPreview(node.bodyMarkdown) %></span></span>
+    <span class="thread-score" aria-label="<%= deleted ? '该内容已删除' : '净认同数' %>"><%= deleted ? '—' : upvotes - downvotes %></span>
+    <span class="thread-summary"><strong><%= title %></strong><small><%= author %> · <%= discussionDate(node.createdAt || node.created_at) %> · <%= replies.length %> 条直接回复<% if (!deleted && editCount > 0 && editedAt) { %> · 已修改 <%= editCount %> 次<% } %></small><span><%= deleted ? '作者信息、标题、正文和票数已清除；回复结构保留。' : plainPreview(node.bodyMarkdown) %></span></span>
     <span class="thread-expand">展开</span>
   </summary>
   <div class="thread-content">
 <% } else { %>
-<article class="discussion-reply" id="discussion-<%= node.id %>" style="--reply-depth:<%= nestedDepth %>">
+<article class="discussion-reply<% if (deleted) { %> discussion-reply--deleted<% } %>" id="discussion-<%= node.id %>" style="--reply-depth:<%= nestedDepth %>">
 <% } %>
-    <header class="discussion-meta"><span class="discussion-meta__avatar" aria-hidden="true"><%= Array.from(String(author))[0] || '用' %></span><p><strong><%= author %></strong><time datetime="<%= node.createdAt %>"><%= discussionDate(node.createdAt) %></time></p></header>
-    <% if (!isTopic && node.title) { %><h4 class="discussion-reply__title"><%= node.title %></h4><% } %>
-    <div class="markdown-body discussion-copy"><%- node.renderedBody %></div>
-    <div class="discussion-actions">
-      <div class="discussion-actions__bar">
-      <% if (user) { %>
-        <form action="/discussions/<%= node.id %>/vote" method="post" data-vote-form data-vote-kind="up"><input type="hidden" name="_csrf" value="<%= safeCsrfToken %>"><input type="hidden" name="value" value="<%= node.viewerVote === 1 ? 0 : 1 %>"><button type="submit" class="<%= node.viewerVote === 1 ? 'is-active' : '' %>">认同 <strong data-upvotes><%= node.upvoteCount %></strong></button></form>
-        <form action="/discussions/<%= node.id %>/vote" method="post" data-vote-form data-vote-kind="down"><input type="hidden" name="_csrf" value="<%= safeCsrfToken %>"><input type="hidden" name="value" value="<%= node.viewerVote === -1 ? 0 : -1 %>"><button type="submit" class="<%= node.viewerVote === -1 ? 'is-active is-negative' : '' %>">反对 <strong data-downvotes><%= node.downvoteCount %></strong></button></form>
-        <button class="reply-composer__toggle" type="button" data-reply-toggle aria-expanded="false" aria-controls="reply-composer-<%= node.id %>">回复</button>
-      <% } else { %><a href="/login?next=<%= encodeURIComponent('/videos/' + videoId + '#discussion-' + node.id) %>">登录后认同或回复</a><% } %>
+    <header class="discussion-meta"><span class="discussion-meta__avatar" aria-hidden="true"><% if (authorUsername && authorAvatarStorageName) { %><img src="/users/<%= encodeURIComponent(authorUsername) %>/avatar?v=<%= encodeURIComponent(authorAvatarStorageName) %>" alt=""><% } else { %><%= deleted ? '×' : (Array.from(String(author))[0] || '用') %><% } %></span><p><strong><% if (authorUsername) { %><a href="/users/<%= encodeURIComponent(authorUsername) %>"><%= author %></a><% } else { %><%= author %><% } %></strong><time datetime="<%= node.createdAt || node.created_at %>"><%= discussionDate(node.createdAt || node.created_at) %></time><% if (!deleted && editCount > 0 && editedAt) { %><small class="discussion-meta__edited">已修改 <%= editCount %> 次 · 最后修改于 <time datetime="<%= editedAt %>"><%= discussionDate(editedAt) %></time></small><% } %></p></header>
+    <% if (deleted) { %>
+      <p class="discussion-tombstone-copy">该内容已由作者删除。为保留对话上下文，此处只留下匿名墓碑。</p>
+    <% } else { %>
+      <% if (!isTopic && node.title) { %><h4 class="discussion-reply__title"><%= node.title %></h4><% } %>
+      <div class="markdown-body discussion-copy"><%- node.renderedBody %></div>
+      <div class="discussion-actions">
+        <div class="discussion-actions__bar">
+        <% if (user && !readOnlyMode) { %>
+          <form action="/discussions/<%= node.id %>/vote" method="post" data-vote-form data-vote-kind="up"><input type="hidden" name="_csrf" value="<%= safeCsrfToken %>"><input type="hidden" name="value" value="<%= node.viewerVote === 1 ? 0 : 1 %>"><button type="submit" class="<%= node.viewerVote === 1 ? 'is-active' : '' %>">认同 <strong data-upvotes><%= upvotes %></strong></button></form>
+          <form action="/discussions/<%= node.id %>/vote" method="post" data-vote-form data-vote-kind="down"><input type="hidden" name="_csrf" value="<%= safeCsrfToken %>"><input type="hidden" name="value" value="<%= node.viewerVote === -1 ? 0 : -1 %>"><button type="submit" class="<%= node.viewerVote === -1 ? 'is-active is-negative' : '' %>">反对 <strong data-downvotes><%= downvotes %></strong></button></form>
+          <button class="reply-composer__toggle" type="button" data-reply-toggle aria-expanded="false" aria-controls="reply-composer-<%= node.id %>">回复</button>
+        <% } else if (!readOnlyMode) { %><a href="/login?next=<%= encodeURIComponent('/videos/' + videoId + '#discussion-' + node.id) %>">登录后认同或回复</a><% } else { %><span class="discussion-readonly-counts">认同 <strong><%= upvotes %></strong> · 反对 <strong><%= downvotes %></strong> · 只读</span><% } %>
+        </div>
+        <% if (user && !readOnlyMode) { %><section class="reply-composer" id="reply-composer-<%= node.id %>" data-reply-composer hidden aria-label="回复 <%= author %>"><header class="reply-composer__header"><div><strong>回复 <%= author %></strong><span>使用与发起讨论相同的编辑工具</span></div><button type="button" data-reply-close aria-label="关闭回复编辑器">×</button></header><%- include('discussion-composer', { videoId: videoId, safeCsrfToken: safeCsrfToken, parentId: node.id, composerId: 'reply-composer-' + node.id, replyTo: author }) %></section><% } %>
+        <% if (isOwner) { %>
+          <div class="discussion-owner-tools">
+            <details class="discussion-edit-disclosure"><summary>编辑</summary><div class="discussion-edit-disclosure__editor"><%- include('discussion-composer', { videoId: videoId, safeCsrfToken: safeCsrfToken, parentId: null, composerMode: 'edit', isReply: !isTopic, composerId: 'video-edit-' + node.id, formAction: '/discussions/' + node.id + '/edit', titleValue: node.title || '', bodyValue: node.bodyMarkdown || '', replyTo: '', submitLabel: '保存修改' }) %></div></details>
+            <form action="/discussions/<%= node.id %>/delete" method="post" data-confirm-message="<%= replies.length ? '这条内容已有回复。删除后将保留匿名墓碑和子回复，继续吗？' : '确定删除这条内容吗？' %>"><input type="hidden" name="_csrf" value="<%= safeCsrfToken %>"><button class="text-danger-button" type="submit">删除</button></form>
+          </div>
+        <% } %>
       </div>
-      <% if (user) { %><section class="reply-composer" id="reply-composer-<%= node.id %>" data-reply-composer hidden aria-label="回复 <%= author %>"><header class="reply-composer__header"><div><strong>回复 <%= author %></strong><span>使用与发起讨论相同的编辑工具</span></div><button type="button" data-reply-close aria-label="关闭回复编辑器">×</button></header><%- include('discussion-composer', { videoId: videoId, safeCsrfToken: safeCsrfToken, parentId: node.id, composerId: 'reply-composer-' + node.id, replyTo: author }) %></section><% } %>
-    </div>
-    <% if (node.replies.length) { %><div class="reply-list"><% node.replies.forEach(function(reply) { %><%- include('discussion-node', { node: reply, depth: depth + 1, videoId: videoId, user: user, safeCsrfToken: safeCsrfToken, discussionDate: discussionDate, plainPreview: plainPreview }) %><% }); %></div><% } %>
+    <% } %>
+    <% if (replies.length) { %><div class="reply-list"><% replies.forEach(function(reply) { %><%- include('discussion-node', { node: reply, depth: depth + 1, videoId: videoId, user: user, readOnly: readOnlyMode, safeCsrfToken: safeCsrfToken, discussionDate: discussionDate, plainPreview: plainPreview }) %><% }); %></div><% } %>
 <% if (isTopic) { %>
   </div>
 </details>

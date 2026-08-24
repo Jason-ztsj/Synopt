@@ -237,7 +237,10 @@ test('worker 区分内容拒绝与可重试的验证系统故障', async (t) => 
   const makeDatabase = (id, storageName) => ({
     claimNextVideoForValidation: () => ({ id, storageName, mediaType: 'video/mp4' }),
     completeVideoValidation: () => assert.fail('失败任务不应提交 ready'),
-    rejectVideoValidation: (videoId, summary) => { rejected = { videoId, summary }; },
+    rejectVideoValidation: (videoId, summary) => {
+      rejected = { videoId, summary };
+      return 1;
+    },
     failVideoValidation: (videoId, summary) => { failed = { videoId, summary }; }
   });
 

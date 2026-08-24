@@ -19,6 +19,8 @@ const DEFAULTS = Object.freeze({
   MEDIA_VALIDATION_POLL_MS: '1000',
   MEDIA_VALIDATION_STALE_MINUTES: '30',
   MEDIA_VALIDATION_THREADS: '2',
+  IMAGE_NORMALIZATION_CONCURRENCY: '2',
+  IMAGE_NORMALIZATION_COOLDOWN_SECONDS: '10',
   FFPROBE_PATH: 'ffprobe',
   FFMPEG_PATH: 'ffmpeg'
 });
@@ -79,6 +81,16 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
   const mediaValidationPollMs = positiveInteger(read('MEDIA_VALIDATION_POLL_MS'), 'MEDIA_VALIDATION_POLL_MS', 60_000);
   const mediaValidationStaleMinutes = positiveInteger(read('MEDIA_VALIDATION_STALE_MINUTES'), 'MEDIA_VALIDATION_STALE_MINUTES', 24 * 60);
   const mediaValidationThreads = positiveInteger(read('MEDIA_VALIDATION_THREADS'), 'MEDIA_VALIDATION_THREADS', 8);
+  const imageNormalizationConcurrency = positiveInteger(
+    read('IMAGE_NORMALIZATION_CONCURRENCY'),
+    'IMAGE_NORMALIZATION_CONCURRENCY',
+    8
+  );
+  const imageNormalizationCooldownSeconds = positiveInteger(
+    read('IMAGE_NORMALIZATION_COOLDOWN_SECONDS'),
+    'IMAGE_NORMALIZATION_COOLDOWN_SECONDS',
+    3600
+  );
   const ffprobePath = requiredText(read('FFPROBE_PATH'), 'FFPROBE_PATH');
   const ffmpegPath = requiredText(read('FFMPEG_PATH'), 'FFMPEG_PATH');
 
@@ -96,6 +108,7 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
     databasePath,
     videoStoragePath,
     coverStoragePath: path.join(path.dirname(videoStoragePath), 'covers'),
+    avatarStoragePath: path.join(path.dirname(videoStoragePath), 'avatars'),
     temporaryStoragePath: path.join(videoStoragePath, '.tmp'),
     pendingStoragePath: path.join(videoStoragePath, '.pending'),
     maxUploadMb,
@@ -115,6 +128,8 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
     mediaValidationPollMs,
     mediaValidationStaleMs: mediaValidationStaleMinutes * 60 * 1000,
     mediaValidationThreads,
+    imageNormalizationConcurrency,
+    imageNormalizationCooldownSeconds,
     ffprobePath,
     ffmpegPath
   });

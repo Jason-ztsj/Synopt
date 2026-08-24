@@ -1,0 +1,106 @@
+<%
+  const accountVideos = typeof videos !== 'undefined' && Array.isArray(videos) ? videos : [];
+  const videosCsrf = typeof csrfToken === 'string' ? csrfToken : '';
+  const videosPagination = typeof pagination !== 'undefined' && pagination && typeof pagination === 'object' ? pagination : {};
+  const videosPage = Math.max(1, Number(videosPagination.page ?? videosPagination.currentPage ?? 1) || 1);
+  const videosPages = Math.max(1, Number(videosPagination.totalPages ?? videosPagination.pages ?? 1) || 1);
+  const videosTotal = Math.max(0, Number(videosPagination.totalItems ?? videosPagination.total ?? accountVideos.length) || 0);
+  const videoDate = function(value) {
+    const date = value ? new Date(value) : null;
+    return date && !Number.isNaN(date.getTime())
+      ? new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date)
+      : '';
+  };
+  const videoStatus = function(video) {
+    if (video.deletedAt || video.deleted_at) return { key: 'deleted', label: '已永久删除' };
+    if (video.withdrawnAt || video.withdrawn_at) return { key: 'withdrawn', label: '已撤回' };
+    const moderation = video.moderationStatus || video.moderation_status;
+    const validation = video.validationStatus || video.validation_status;
+    const visibility = video.visibility || 'public';
+    if (['hidden', 'removed'].includes(moderation)) return { key: 'warning', label: '暂不可见' };
+    if (validation === 'rejected') return { key: 'danger', label: '验证未通过' };
+    if (validation === 'validation_failed') return { key: 'danger', label: '验证服务失败' };
+    if (['pending', 'validating'].includes(validation)) return { key: 'pending', label: '正在验证' };
+    if (visibility !== 'public') return { key: 'warning', label: '私密稿件' };
+    if (validation === 'ready_with_warnings') return { key: 'warning', label: '已发布·有警告' };
+    return { key: 'public', label: '已发布' };
+  };
+%>
+<%- include('partials/head', { pageTitle: '我的稿件｜同见', pageDescription: '查看、撤回或重新发布你在同见分享的视频。' }) %>
+<body class="page page--account">
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  <%- include('partials/header', { currentPath: '/account/videos' }) %>
+  <div class="app-shell shell">
+    <%- include('partials/sidebar', { currentPath: '/account/videos', categoryTree: typeof categoryTree !== 'undefined' ? categoryTree : [] }) %>
+    <main id="main-content" class="account-main" tabindex="-1">
+      <header class="account-heading"><div><p class="eyebrow"><span></span> 个人账号</p><h1>我的稿件</h1><p>管理你发布的长视频。撤回会保留文件、数据与讨论，也可以稍后重新发布。</p></div><a class="button button--primary" href="/upload">发布新视频 <span aria-hidden="true">＋</span></a></header>
+
+      <div class="account-layout">
+        <%- include('partials/account-navigation', { currentPath: '/account/videos' }) %>
+        <div class="account-content">
+          <%- include('partials/account-feedback') %>
+          <div class="account-list-summary"><p><strong><%= videosTotal %></strong> 份稿件</p><span>每页最多 20 条</span></div>
+
+          <% if (!accountVideos.length) { %>
+            <section class="account-empty"><span aria-hidden="true">▷</span><h2>还没有稿件</h2><p>分享第一段采用开放许可的横屏长视频。</p><a class="button button--primary" href="/upload">开始发布</a></section>
+          <% } else { %>
+            <div class="account-video-list">
+              <% accountVideos.forEach(function(video) {
+                const status = videoStatus(video);
+                const withdrawn = Boolean(video.withdrawnAt || video.withdrawn_at);
+                const deleted = Boolean(video.deletedAt || video.deleted_at);
+                const validation = video.validationStatus || video.validation_status;
+                const canRepublish = withdrawn && ['ready', 'ready_with_warnings'].includes(validation);
+                const coverName = video.coverStorageName || video.cover_storage_name;
+                const upvotes = Number(video.upvoteCount ?? video.upvote_count ?? 0) || 0;
+                const downvotes = Number(video.downvoteCount ?? video.downvote_count ?? 0) || 0;
+                const discussionsCount = Number(video.discussionCount ?? video.discussion_count ?? 0) || 0;
+              %>
+                <article class="account-video-card" id="video-<%= video.id %>">
+                  <a class="account-video-card__cover" href="/videos/<%= video.id %>" aria-label="查看《<%= deleted ? '已删除作品' : video.title %>》">
+                    <% if (coverName && !deleted) { %><img src="/videos/<%= video.id %>/cover" alt="" loading="lazy"><% } else { %><span class="catalog-card__placeholder" aria-hidden="true"><i></i><i></i><b><%= deleted ? '存档' : '同见' %></b></span><% } %>
+                  </a>
+                  <div class="account-video-card__body">
+                    <div class="account-video-card__topline"><span class="content-status content-status--<%= status.key %>"><%= status.label %></span><% if (video.createdAt || video.created_at) { %><time datetime="<%= video.createdAt || video.created_at %>"><%= videoDate(video.createdAt || video.created_at) %></time><% } %></div>
+                    <h2><a href="/videos/<%= video.id %>"><%= deleted ? '已删除作品' : video.title %></a></h2>
+                    <% if (!deleted) { %><p><%= video.creator || '未填写创作者' %><% if (video.categoryName || video.category_name) { %> · <%= video.categoryName || video.category_name %><% } %></p><% } else { %><p>作品文件与可识别元数据已清除，讨论存档仍可阅读。</p><% } %>
+                    <div class="account-video-card__signals"><span>认同 <strong><%= deleted ? 0 : upvotes %></strong></span><span>反对 <strong><%= deleted ? 0 : downvotes %></strong></span><span>讨论 <strong><%= discussionsCount %></strong></span></div>
+                    <% if (!deleted) { %>
+                      <div class="account-video-card__actions">
+                        <a href="/videos/<%= video.id %>">查看稿件</a>
+                        <% if (canRepublish) { %>
+                          <form action="/account/videos/<%= video.id %>/republish" method="post"><input type="hidden" name="_csrf" value="<%= videosCsrf %>"><button type="submit">重新发布</button></form>
+                        <% } else if (withdrawn) { %>
+                          <span class="account-video-card__action-note">验证通过后可重新发布</span>
+                        <% } else { %>
+                          <form action="/account/videos/<%= video.id %>/withdraw" method="post" data-confirm-message="确定撤回这份稿件吗？它将从公开列表和搜索中隐藏，但可以稍后重新发布。"><input type="hidden" name="_csrf" value="<%= videosCsrf %>"><button type="submit">撤回</button></form>
+                        <% } %>
+                      </div>
+                      <% if (withdrawn) { %>
+                        <details class="danger-disclosure">
+                          <summary>永久删除稿件</summary>
+                          <div><p>视频与封面文件将被清除，且无法恢复。他人已发布的讨论将以存档形式保留。</p>
+                            <form action="/account/videos/<%= video.id %>/delete" method="post" data-typed-confirmation data-confirm-value="<%= video.title %>" data-confirm-message="这是最后一次确认：永久删除后无法恢复视频文件。">
+                              <input type="hidden" name="_csrf" value="<%= videosCsrf %>">
+                              <label class="field"><span class="field__label">输入完整标题以确认</span><input type="text" name="confirmTitle" autocomplete="off" spellcheck="false" data-confirmation-input required></label>
+                              <button class="button button--danger" type="submit" data-danger-submit>永久删除</button>
+                              <p data-confirmation-status aria-live="polite"></p>
+                            </form>
+                          </div>
+                        </details>
+                      <% } %>
+                    <% } %>
+                  </div>
+                </article>
+              <% }); %>
+            </div>
+          <% } %>
+
+          <% if (videosPages > 1) { %><nav class="account-pagination" aria-label="稿件分页"><% if (videosPage > 1) { %><a href="?page=<%= videosPage - 1 %>">← 上一页</a><% } else { %><span></span><% } %><strong>第 <%= videosPage %> / <%= videosPages %> 页</strong><% if (videosPage < videosPages) { %><a href="?page=<%= videosPage + 1 %>">下一页 →</a><% } else { %><span></span><% } %></nav><% } %>
+        </div>
+      </div>
+    </main>
+  </div>
+  <%- include('partials/footer') %>
+</body>
+</html>
