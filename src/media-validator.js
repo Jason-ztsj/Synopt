@@ -135,7 +135,7 @@ function containerFromProbe(formatName, expectedMediaType) {
 }
 
 function policyCodec(codecName) {
-  return ({ h264: 'avc', hevc: 'hevc', vp9: 'vp9', av1: 'av1', aac: 'aac', opus: 'opus' })[codecName] ?? null;
+  return ({ h264: 'avc', hevc: 'hevc', vp8: 'vp8', vp9: 'vp9', av1: 'av1', aac: 'aac', opus: 'opus', mp3: 'mp3', flac: 'flac' })[codecName] ?? null;
 }
 
 function rotationFromStream(stream) {
@@ -402,6 +402,7 @@ export async function probeCanonicalMedia(filePath, expectedMediaType, config) {
     videoCodec,
     audioCodec,
     playbackStrategy: plan.playbackStrategy,
+    compatibility: plan.compatibility,
     durationSeconds: positiveNumber(probe.format?.duration) ?? positiveNumber(videoStream.duration),
     width: positiveInteger(videoStream.width),
     height: positiveInteger(videoStream.height),

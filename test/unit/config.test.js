@@ -13,7 +13,7 @@ test('配置默认值、相对路径与 MiB 字节换算正确', () => {
   assert.equal(config.avatarStoragePath, path.join(cwd, 'data/avatars'));
   assert.equal(config.temporaryStoragePath, path.join(cwd, 'data/videos/.tmp'));
   assert.equal(config.pendingStoragePath, path.join(cwd, 'data/videos/.pending'));
-  assert.equal(config.maxUploadBytes, 90 * 1024 * 1024);
+  assert.equal(config.maxUploadBytes, 1024 * 1024 * 1024);
   assert.equal(config.discussionCooldownSeconds, 30);
   assert.equal(config.sessionTtlHours, 168);
   assert.equal(config.sessionTtlMs, 168 * 60 * 60 * 1000);

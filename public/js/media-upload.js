@@ -117,7 +117,7 @@ if (form) {
   }
 
   function codecLabel(codec) {
-    return ({ avc: 'H.264', hevc: 'HEVC', vp9: 'VP9', av1: 'AV1', aac: 'AAC', opus: 'Opus' })[codec]
+    return ({ avc: 'H.264', hevc: 'HEVC', vp8: 'VP8', vp9: 'VP9', av1: 'AV1', aac: 'AAC', opus: 'Opus', mp3: 'MP3', flac: 'FLAC' })[codec]
       ?? String(codec || '无音频');
   }
 
@@ -182,15 +182,17 @@ if (form) {
       if (currentSelection !== selectionNumber) return;
       selected = { file, probe };
       const audio = probe.audioCodec ? ` + ${codecLabel(probe.audioCodec)}` : ' · 无音频';
+      const codecInfo = `${codecLabel(probe.videoCodec)}${audio}`;
       const operation = probe.plan.remuxRequired
         ? `将无损重封装为 ${probe.plan.container.toUpperCase()}`
         : '容器已经符合发布规范';
       const dimensions = `${probe.width}×${probe.height}`;
       const duration = formatDuration(probe.duration);
+      const compatible = probe.plan.compatibility === 'guaranteed';
       setAnalysis(
-        probe.plan.experimental ? 'warning' : 'ready',
-        `${codecLabel(probe.videoCodec)}${audio}`,
-        `${dimensions}${duration ? ` · ${duration}` : ''} · ${operation}${probe.plan.experimental ? '；HEVC 目前仅保证在原生支持的设备上播放' : ''}`
+        compatible ? 'ready' : 'warning',
+        compatible ? codecInfo : '该视频兼容性较差',
+        `${compatible ? '' : `${codecInfo} · `}${dimensions}${duration ? ` · ${duration}` : ''} · ${operation}${compatible ? '' : '；部分浏览器或设备可能无法播放'}`
       );
       if (detail) detail.textContent = `${formatFileSize(file.size)} · 检测完成`;
     } catch (error) {
@@ -237,6 +239,89 @@ if (form) {
     const controller = new AbortController();
     submissionController = controller;
 
+    const csrfToken = form.querySelector('input[name="_csrf"]')?.value || '';
+
+    async function uploadChunked(uploadBody, canonicalName) {
+      const csrfHeaders = { 'x-csrf-token': csrfToken };
+      const createResponse = await fetch('/videos/media-session', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json', ...csrfHeaders },
+        body: JSON.stringify({
+          totalBytes: uploadBody.size,
+          fileName: canonicalName,
+          sourceFilename: selected.file.name,
+          mimeType: selected.probe.plan.mediaType,
+          container: selected.probe.container,
+          videoCodec: selected.probe.videoCodec,
+          audioCodec: selected.probe.audioCodec || null,
+          operation: selected.probe.plan.remuxRequired ? 'remux' : 'direct'
+        }),
+        credentials: 'same-origin',
+        signal: controller.signal
+      });
+      const sessionPayload = await createResponse.json().catch(() => ({}));
+      if (!createResponse.ok || !sessionPayload.sessionId) {
+        throw new Error(sessionPayload.error || '无法创建分片上传会话。');
+      }
+      const { sessionId, chunkSize, totalBytes } = sessionPayload;
+      let uploaded = 0;
+      for (let offset = 0; offset < uploadBody.size; offset += chunkSize) {
+        const chunk = uploadBody.slice(offset, Math.min(offset + chunkSize, uploadBody.size));
+        const index = Math.floor(offset / chunkSize);
+        const chunkResponse = await fetch(`/videos/media-session/${sessionId}/chunks/${index}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/octet-stream', ...csrfHeaders },
+          body: chunk,
+          credentials: 'same-origin',
+          signal: controller.signal
+        });
+        if (!chunkResponse.ok) {
+          const errorPayload = await chunkResponse.json().catch(() => ({}));
+          throw new Error(errorPayload.error || '分片上传失败。');
+        }
+        uploaded += chunk.size;
+        setStatus(`正在分片上传：${Math.round((uploaded / totalBytes) * 100)}%`);
+      }
+      const completeResponse = await fetch(`/videos/media-session/${sessionId}/complete`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json', ...csrfHeaders },
+        body: JSON.stringify({}),
+        credentials: 'same-origin',
+        signal: controller.signal
+      });
+      if (!completeResponse.ok) {
+        const errorPayload = await completeResponse.json().catch(() => ({}));
+        throw new Error(errorPayload.error || '分片组装失败。');
+      }
+      const body = new FormData(form);
+      body.set('mediaSessionId', sessionId);
+      body.set('sourceFilename', selected.file.name);
+      body.set('clientContainer', selected.probe.container);
+      body.set('clientVideoCodec', selected.probe.videoCodec);
+      body.set('clientAudioCodec', selected.probe.audioCodec || 'none');
+      body.set('clientOperation', selected.probe.plan.remuxRequired ? 'remux' : 'direct');
+      setStatus('正在提交发布信息；上传后还会由服务器完整验证……');
+      if (button) button.textContent = '正在发布…';
+      const response = await fetch(form.action, {
+        method: 'POST',
+        headers: { Accept: 'application/json' },
+        body,
+        credentials: 'same-origin',
+        redirect: 'error',
+        signal: controller.signal
+      });
+      const contentType = response.headers.get('content-type') || '';
+      const payload = contentType.includes('application/json') ? await response.json().catch(() => ({})) : {};
+      const redirectPath = safeRedirectPath(payload.redirect);
+      if (response.ok && redirectPath) {
+        submissionController = null;
+        window.location.assign(redirectPath);
+        return;
+      }
+      if (response.ok) throw new Error('服务器已接收文件，但没有返回可用的发布页地址。');
+      throw new Error(payload.error || '服务器没有接受这个媒体文件。');
+    }
+
     try {
       let uploadBody = selected.file.slice(
         0,
@@ -262,6 +347,15 @@ if (form) {
 
       const baseName = selected.file.name.replace(/\.[^.]*$/, '') || 'video';
       const canonicalName = `${baseName}${selected.probe.plan.extension}`;
+
+      const DIRECT_UPLOAD_MAX_BYTES = 50 * 1024 * 1024;
+      if (uploadBody.size > DIRECT_UPLOAD_MAX_BYTES) {
+        setStatus('正在分片上传；单次请求不会超过隧道上限……');
+        if (button) button.textContent = '正在分片上传…';
+        await uploadChunked(uploadBody, canonicalName);
+        return;
+      }
+
       const body = new FormData(form);
       body.set('video', uploadBody, canonicalName);
       body.set('sourceFilename', selected.file.name);

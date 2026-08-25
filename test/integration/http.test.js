@@ -405,6 +405,69 @@ test('真实 HTTP：上传 CC BY-NC-ND 视频并支持完整、Range 与 HEAD �
   assert.equal(storedFiles.filter((file) => file.endsWith('.upload')).length, 0);
 });
 
+test('真实 HTTP：大文件分片上传（建会话→收片→组装→发布）可经受权与完整校验', async (t) => {
+  const instance = await startApplication();
+  t.after(() => stopApplication(instance));
+  const auth = instance.auth;
+  const original = await generateFixture('mp4');
+  const csrfHeaders = { 'x-csrf-token': auth.csrfToken };
+
+  const createResponse = await fetch(`${instance.baseUrl}/videos/media-session`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json', cookie: auth.cookieHeader(), ...csrfHeaders },
+    body: JSON.stringify({
+      totalBytes: original.length,
+      fileName: 'river.mp4',
+      sourceFilename: 'river.mp4',
+      mimeType: 'video/mp4',
+      container: 'mp4',
+      videoCodec: 'avc',
+      audioCodec: 'aac',
+      operation: 'direct'
+    })
+  });
+  assert.equal(createResponse.status, 201);
+  const session = await createResponse.json();
+  assert.ok(session.sessionId);
+  assert.ok(session.chunkSize > 0);
+  assert.equal(session.expectedCount, 1, '测试文件远小于默认分片大小，应为单片');
+
+  const chunkResponse = await fetch(`${instance.baseUrl}/videos/media-session/${session.sessionId}/chunks/0`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/octet-stream', cookie: auth.cookieHeader(), ...csrfHeaders },
+    body: Buffer.from(original)
+  });
+  assert.equal(chunkResponse.status, 200);
+
+  const completeResponse = await fetch(`${instance.baseUrl}/videos/media-session/${session.sessionId}/complete`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json', cookie: auth.cookieHeader(), ...csrfHeaders },
+    body: JSON.stringify({})
+  });
+  assert.equal(completeResponse.status, 200);
+
+  const form = new FormData();
+  form.set('_csrf', auth.csrfToken);
+  form.set('title', '分片上传的河流');
+  form.set('creator', '山谷影像小组');
+  form.set('description', '一段用于自动化验收的开放影像。');
+  form.set('category', 'science-technology');
+  form.set('tags', '开放视频, 分片');
+  form.set('attribution', 'on');
+  form.set('mediaSessionId', session.sessionId);
+  const publishResponse = await fetch(`${instance.baseUrl}/videos`, {
+    method: 'POST',
+    headers: { cookie: auth.cookieHeader() },
+    body: form,
+    redirect: 'manual'
+  });
+  assert.equal(publishResponse.status, 303);
+  const location = publishResponse.headers.get('location');
+  assert.match(location, /^\/videos\/[0-9a-f-]+$/i);
+  const validation = await waitForValidation(instance, location);
+  assert.equal(validation.status, 'ready');
+});
+
 test('真实 HTTP：WebM VP9/Opus 经完整验证后以正确 MIME 原样公开', async (t) => {
   const instance = await startApplication();
   t.after(() => stopApplication(instance));

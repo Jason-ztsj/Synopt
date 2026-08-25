@@ -79,7 +79,7 @@
       </div>
     <% } %>
 
-    <form class="upload-form" action="/videos" method="post" enctype="multipart/form-data" data-upload-form data-max-upload-bytes="<%= Math.floor((typeof maxUploadMb !== 'undefined' ? maxUploadMb : 90) * 1024 * 1024) %>">
+    <form class="upload-form" action="/videos" method="post" enctype="multipart/form-data" data-upload-form data-max-upload-bytes="<%= Math.floor((typeof maxUploadMb !== 'undefined' ? maxUploadMb : 1024) * 1024 * 1024) %>">
       <input type="hidden" name="_csrf" value="<%= safeCsrfToken %>">
       <% if (uploadUser) { %>
         <div class="signed-in-note" role="status">
@@ -185,7 +185,7 @@
           <span class="file-drop__icon" aria-hidden="true">↑</span>
           <span class="file-drop__copy">
             <strong data-file-title>选择一个视频文件</strong>
-            <small data-file-detail>点击浏览文件 · 最大 <%= typeof maxUploadMb !== 'undefined' ? maxUploadMb : 90 %> MiB</small>
+            <small data-file-detail>点击浏览文件 · 最大 <%= typeof maxUploadMb !== 'undefined' ? maxUploadMb : 1024 %> MiB</small>
           </span>
           <span class="file-drop__action">选择文件</span>
         </label>

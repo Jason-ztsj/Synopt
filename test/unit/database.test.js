@@ -22,6 +22,7 @@ function video(id, createdAt) {
     videoCodec: 'unknown',
     audioCodec: null,
     playbackStrategy: 'native',
+    compatibility: 'guaranteed',
     validationStatus: 'ready',
     sha256: null,
     durationSeconds: null,
@@ -293,7 +294,7 @@ test('schema v0 无账号数据库迁移到最新版，并保留视频、讨论�
 
     database = openDatabase(databasePath);
     assert.equal(database.getSchemaVersion(), CURRENT_SCHEMA_VERSION);
-    assert.equal(CURRENT_SCHEMA_VERSION, 5);
+    assert.equal(CURRENT_SCHEMA_VERSION, 6);
     assert.equal(database.raw.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
     assert.deepEqual(database.raw.prepare('PRAGMA foreign_key_check').all(), []);
     const migratedVideo = database.getVideo('legacy-video');

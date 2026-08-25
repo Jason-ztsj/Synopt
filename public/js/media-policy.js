@@ -10,7 +10,10 @@ export const SUPPORTED_SOURCE_CONTAINERS = Object.freeze(['mp4', 'mov', 'mkv', '
 
 const PLANS = Object.freeze({
   avc: Object.freeze({
-    allowedAudioCodecs: Object.freeze(['aac']),
+    allowedAudioCodecs: Object.freeze(['aac', 'mp3', 'opus', 'flac']),
+    // AAC 在 MP4 中所有主流浏览器原生播放；mp3/opus/flac 可无损重封装进 MP4，
+    // 但并非所有浏览器都原生播放，故归为 limited。
+    guaranteedAudioCodecs: Object.freeze(['aac']),
     container: 'mp4',
     extension: '.mp4',
     mediaType: 'video/mp4',
@@ -19,7 +22,8 @@ const PLANS = Object.freeze({
     experimental: false
   }),
   hevc: Object.freeze({
-    allowedAudioCodecs: Object.freeze(['aac']),
+    allowedAudioCodecs: Object.freeze(['aac', 'mp3', 'opus', 'flac']),
+    guaranteedAudioCodecs: Object.freeze(['aac']),
     container: 'mp4',
     extension: '.mp4',
     mediaType: 'video/mp4',
@@ -27,8 +31,19 @@ const PLANS = Object.freeze({
     label: 'HEVC / AAC · MP4',
     experimental: true
   }),
+  vp8: Object.freeze({
+    allowedAudioCodecs: Object.freeze(['opus']),
+    guaranteedAudioCodecs: Object.freeze(['opus']),
+    container: 'webm',
+    extension: '.webm',
+    mediaType: 'video/webm',
+    playbackStrategy: 'native',
+    label: 'VP8 / Opus · WebM',
+    experimental: false
+  }),
   vp9: Object.freeze({
     allowedAudioCodecs: Object.freeze(['opus']),
+    guaranteedAudioCodecs: Object.freeze(['opus']),
     container: 'webm',
     extension: '.webm',
     mediaType: 'video/webm',
@@ -38,6 +53,7 @@ const PLANS = Object.freeze({
   }),
   av1: Object.freeze({
     allowedAudioCodecs: Object.freeze(['opus']),
+    guaranteedAudioCodecs: Object.freeze(['opus']),
     container: 'webm',
     extension: '.webm',
     mediaType: 'video/webm',
@@ -48,7 +64,7 @@ const PLANS = Object.freeze({
 });
 
 function readableCodec(codec) {
-  return ({ avc: 'H.264', hevc: 'HEVC', vp9: 'VP9', av1: 'AV1', aac: 'AAC', opus: 'Opus' })[codec]
+  return ({ avc: 'H.264', hevc: 'HEVC', vp8: 'VP8', vp9: 'VP9', av1: 'AV1', aac: 'AAC', opus: 'Opus', mp3: 'MP3', flac: 'FLAC' })[codec]
     ?? String(codec || '未知编码');
 }
 
@@ -93,8 +109,11 @@ export function selectMediaPlan({
   }
   if (audioCodec && !plan.allowedAudioCodecs.includes(audioCodec)) {
     const expected = plan.allowedAudioCodecs.map(readableCodec).join(' 或 ');
+    const suggested = plan.guaranteedAudioCodecs.length
+      ? readableCodec(plan.guaranteedAudioCodecs[0])
+      : '兼容编码';
     throw new MediaPolicyError(
-      `${readableCodec(videoCodec)} 视频目前只支持搭配 ${expected} 音频；检测到 ${readableCodec(audioCodec)}。`,
+      `${readableCodec(videoCodec)} 视频目前只支持搭配 ${expected} 音频；检测到 ${readableCodec(audioCodec)}。请先在本地把音轨转成 ${suggested} 再上传。`,
       'UNSUPPORTED_AUDIO_CODEC'
     );
   }
@@ -105,10 +124,13 @@ export function selectMediaPlan({
     );
   }
 
+  const audioLimited = Boolean(audioCodec) && !plan.guaranteedAudioCodecs.includes(audioCodec);
+  const compatibility = (plan.experimental || audioLimited) ? 'limited' : 'guaranteed';
   return Object.freeze({
     ...plan,
     videoCodec,
     audioCodec,
+    compatibility,
     remuxRequired: container !== plan.container
   });
 }

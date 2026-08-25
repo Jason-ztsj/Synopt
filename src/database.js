@@ -3,7 +3,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createGovernanceStore } from './governance-store.js';
 
-export const CURRENT_SCHEMA_VERSION = 5;
+export const CURRENT_SCHEMA_VERSION = 6;
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 100;
@@ -37,6 +37,7 @@ function mapVideo(row) {
     videoCodec: row.video_codec ?? 'unknown',
     audioCodec: row.audio_codec ?? null,
     playbackStrategy: row.playback_strategy ?? 'native',
+    compatibility: row.compatibility ?? 'guaranteed',
     validationStatus: row.validation_status ?? 'ready',
     sha256: row.sha256 ?? null,
     durationSeconds: row.duration_seconds ?? null,
@@ -966,6 +967,105 @@ function ensureV5GovernanceConstraints(database) {
   `);
 }
 
+function migrateToV6(database) {
+  database.exec('PRAGMA foreign_keys = OFF');
+  database.exec('BEGIN IMMEDIATE');
+  try {
+    // Another process may have completed the migration while this connection
+    // waited for the write lock. Re-read the version after BEGIN IMMEDIATE.
+    if (database.prepare('PRAGMA user_version').get().user_version >= 6) {
+      database.exec('COMMIT');
+      return;
+    }
+    // Rebuild videos to widen the codec CHECK constraints (vp8 video;
+    // mp3/flac audio) and add a persisted compatibility level consumed by
+    // the public player and upload analysis. Existing rows carry no limited
+    // codecs, so they are all seeded as 'guaranteed' (no meaningful backfill).
+    database.exec(`
+      CREATE TABLE videos_v3 (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL CHECK (length(title) BETWEEN 1 AND 120),
+        creator TEXT NOT NULL CHECK (length(creator) BETWEEN 1 AND 80),
+        description TEXT NOT NULL DEFAULT '' CHECK (length(description) <= 2000),
+        license_code TEXT NOT NULL CHECK (license_code IN ('CC0-1.0', 'CC-BY-4.0', 'CC-BY-NC-4.0', 'CC-BY-ND-4.0', 'CC-BY-NC-ND-4.0')),
+        storage_name TEXT NOT NULL UNIQUE,
+        original_filename TEXT NOT NULL,
+        media_type TEXT NOT NULL CHECK (media_type IN ('video/mp4', 'video/webm')),
+        byte_size INTEGER NOT NULL CHECK (byte_size > 0),
+        container TEXT NOT NULL CHECK (container IN ('mp4', 'webm')),
+        video_codec TEXT NOT NULL CHECK (video_codec IN ('unknown', 'avc', 'hevc', 'vp8', 'vp9', 'av1')),
+        audio_codec TEXT CHECK (audio_codec IS NULL OR audio_codec IN ('unknown', 'aac', 'opus', 'mp3', 'flac')),
+        playback_strategy TEXT NOT NULL CHECK (playback_strategy IN ('native', 'native-hevc')),
+        compatibility TEXT NOT NULL DEFAULT 'guaranteed' CHECK (compatibility IN ('guaranteed', 'limited')),
+        validation_status TEXT NOT NULL CHECK (validation_status IN ('pending', 'validating', 'ready', 'ready_with_warnings', 'rejected', 'validation_failed')),
+        sha256 TEXT CHECK (sha256 IS NULL OR length(sha256) = 64),
+        duration_seconds REAL CHECK (duration_seconds IS NULL OR duration_seconds > 0),
+        width INTEGER CHECK (width IS NULL OR width > 0),
+        height INTEGER CHECK (height IS NULL OR height > 0),
+        frame_rate REAL CHECK (frame_rate IS NULL OR frame_rate > 0),
+        validation_warning_count INTEGER NOT NULL DEFAULT 0 CHECK (validation_warning_count >= 0),
+        validation_summary TEXT NOT NULL DEFAULT '{}',
+        validation_started_at TEXT,
+        validated_at TEXT,
+        source_container TEXT,
+        source_video_codec TEXT,
+        source_audio_codec TEXT,
+        ingest_operation TEXT NOT NULL DEFAULT 'unknown' CHECK (ingest_operation IN ('unknown', 'direct', 'remux')),
+        user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL,
+        category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+        cover_storage_name TEXT,
+        cover_media_type TEXT CHECK (cover_media_type IS NULL OR cover_media_type IN ('image/jpeg', 'image/png', 'image/webp')),
+        cover_source TEXT CHECK (cover_source IS NULL OR cover_source IN ('uploaded', 'generated')),
+        visibility TEXT NOT NULL DEFAULT 'public' CHECK (visibility IN ('public', 'unlisted', 'private')),
+        moderation_status TEXT NOT NULL DEFAULT 'visible' CHECK (moderation_status IN ('visible', 'hidden', 'removed')),
+        withdrawn_at TEXT,
+        deleted_at TEXT,
+        archive_public INTEGER NOT NULL DEFAULT 0 CHECK (archive_public IN (0, 1)),
+        moderation_version INTEGER NOT NULL DEFAULT 0 CHECK (moderation_version >= 0)
+      ) STRICT;
+    `);
+    database.exec(`
+      INSERT INTO videos_v3 (
+        id, title, creator, description, license_code, storage_name, original_filename,
+        media_type, byte_size, container, video_codec, audio_codec, playback_strategy,
+        compatibility, validation_status, sha256, duration_seconds, width, height, frame_rate,
+        validation_warning_count, validation_summary, validation_started_at, validated_at,
+        source_container, source_video_codec, source_audio_codec, ingest_operation,
+        user_id, created_at, category_id, cover_storage_name, cover_media_type, cover_source,
+        visibility, moderation_status, withdrawn_at, deleted_at, archive_public, moderation_version
+      )
+      SELECT
+        id, title, creator, description, license_code, storage_name, original_filename,
+        media_type, byte_size, container, video_codec, audio_codec, playback_strategy,
+        'guaranteed', validation_status, sha256, duration_seconds, width, height, frame_rate,
+        validation_warning_count, validation_summary, validation_started_at, validated_at,
+        source_container, source_video_codec, source_audio_codec, ingest_operation,
+        user_id, created_at, category_id, cover_storage_name, cover_media_type, cover_source,
+        visibility, moderation_status, withdrawn_at, deleted_at, archive_public, moderation_version
+      FROM videos;
+    `);
+    database.exec('DROP TABLE videos');
+    database.exec('ALTER TABLE videos_v3 RENAME TO videos');
+    database.exec('CREATE INDEX idx_videos_created_at_id ON videos(created_at DESC, id DESC)');
+    database.exec('CREATE INDEX idx_videos_user_id ON videos(user_id)');
+    database.exec('CREATE INDEX idx_videos_validation_status_created_at ON videos(validation_status, created_at ASC, id ASC)');
+    database.exec('CREATE UNIQUE INDEX idx_videos_cover_storage_name ON videos(cover_storage_name) WHERE cover_storage_name IS NOT NULL');
+    database.exec('CREATE INDEX idx_videos_category_created_at ON videos(category_id, created_at DESC, id DESC)');
+    database.exec('CREATE INDEX idx_videos_user_created_at ON videos(user_id, created_at DESC, id DESC)');
+    database.exec('CREATE INDEX idx_videos_public_user_created_at ON videos(user_id, created_at DESC, id DESC) WHERE visibility = \'public\' AND moderation_status = \'visible\' AND withdrawn_at IS NULL AND deleted_at IS NULL');
+    const foreignKeyErrors = database.prepare('PRAGMA foreign_key_check').all();
+    if (foreignKeyErrors.length > 0) throw new Error('数据库 v6 迁移后的外键检查失败');
+    database.exec('PRAGMA user_version = 6');
+    database.exec('COMMIT');
+  } catch (error) {
+    database.exec('ROLLBACK');
+    throw error;
+  } finally {
+    database.exec('PRAGMA foreign_keys = ON');
+  }
+}
+
 function migrate(database) {
   let version = database.prepare('PRAGMA user_version').get().user_version;
   if (version > CURRENT_SCHEMA_VERSION) {
@@ -989,6 +1089,7 @@ function migrate(database) {
   }
   ensureV4SupplementalSchema(database);
   if (version < 5) migrateToV5(database);
+  if (version < 6) migrateToV6(database);
   ensureV5GovernanceConstraints(database);
 }
 
@@ -1113,7 +1214,7 @@ export function openDatabase(databasePath) {
     `),
     completeVideoValidation: database.prepare(`
       UPDATE videos
-      SET media_type = ?, container = ?, video_codec = ?, audio_codec = ?, playback_strategy = ?,
+      SET media_type = ?, container = ?, video_codec = ?, audio_codec = ?, playback_strategy = ?, compatibility = ?,
           sha256 = ?, duration_seconds = ?, width = ?, height = ?, frame_rate = ?,
           validation_status = ?, validation_warning_count = ?, validation_summary = ?, validated_at = ?
       WHERE id = ? AND validation_status = 'validating' AND validation_started_at = ? AND deleted_at IS NULL
@@ -1851,6 +1952,7 @@ export function openDatabase(databasePath) {
         result.videoCodec,
         result.audioCodec ?? null,
         result.playbackStrategy,
+        result.compatibility ?? 'guaranteed',
         result.sha256,
         result.durationSeconds,
         result.width,

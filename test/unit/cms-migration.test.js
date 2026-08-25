@@ -398,7 +398,7 @@ test('真实 schema v4 增量迁移到 v5 保留数据并补全审核默认值',
     legacy.close();
 
     database = openDatabase(databasePath);
-    assert.equal(CURRENT_SCHEMA_VERSION, 5);
+    assert.equal(CURRENT_SCHEMA_VERSION, 6);
     assert.equal(database.getSchemaVersion(), CURRENT_SCHEMA_VERSION);
 
     const migratedUser = database.getUserById('legacy-owner');
@@ -466,7 +466,7 @@ test('真实 schema v4 增量迁移到 v5 保留数据并补全审核默认值',
 
     database.close();
     database = openDatabase(databasePath);
-    assert.equal(database.getSchemaVersion(), 5);
+    assert.equal(database.getSchemaVersion(), 6);
     assert.equal(database.raw.prepare('SELECT count(*) AS count FROM users').get().count, 1);
     assert.equal(database.raw.prepare('SELECT count(*) AS count FROM videos').get().count, 1);
     assert.equal(database.raw.prepare('SELECT count(*) AS count FROM discussions').get().count, 1);

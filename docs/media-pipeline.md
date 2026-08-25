@@ -10,12 +10,14 @@
 
 | 视频轨 | 音频轨 | 规范容器 | 策略 |
 | --- | --- | --- | --- |
-| H.264/AVC | AAC 或无 | MP4 | 原生播放 |
-| HEVC | AAC 或无 | MP4 | 实验性原生播放 |
-| VP9 | Opus 或无 | WebM | 原生播放 |
-| AV1 | Opus 或无 | WebM | 原生播放 |
+| H.264/AVC | AAC 或无 | MP4 | 原生播放（保证级） |
+| H.264/AVC | MP3 / Opus / FLAC | MP4 | 原生播放（有限兼容，部分浏览器可能无法播放） |
+| HEVC | AAC 或无 | MP4 | 实验性原生播放（有限兼容） |
+| VP8 | Opus 或无 | WebM | 原生播放（保证级） |
+| VP9 | Opus 或无 | WebM | 原生播放（保证级） |
+| AV1 | Opus 或无 | WebM | 原生播放（保证级） |
 
-只接受一条视频轨和至多一条音频轨。字幕、封面图、附件、数据轨、旧编码和矩阵外组合会被拒绝。浏览器的 Mediabunny Worker 通过 encoded packet source/sink 复制压缩码流；这里不调用 VideoEncoder、AudioEncoder 或 ffmpeg.wasm。
+只接受一条视频轨和至多一条音频轨。字幕、封面图、附件、数据轨、旧编码和矩阵外组合会被拒绝。可无损重封装但非所有浏览器都能原生播放的组合标记为「有限兼容」，上传端提示兼容度偏低、播放器向观看者提示；无法被现代浏览器原生播放的组合（MPEG-4 Part 2、AC-3、DTS、ALAC 等）会被拒绝并附转码建议。浏览器的 Mediabunny Worker 通过 encoded packet source/sink 复制压缩码流；这里不调用 VideoEncoder、AudioEncoder 或 ffmpeg.wasm。
 
 ## 信任边界与状态机
 
@@ -40,6 +42,8 @@
 ```
 
 只有 `ready` 和 `ready_with_warnings` 会出现在首页、媒体路由和讨论接口。其他状态的详情只允许上传账号查看；匿名请求得到 404，媒体和讨论请求得到 409。
+
+大文件（超过客户端约 50 MiB 阈值）会先经分片上传会话落到隔离临时目录，全部单片收齐后按序流式拼成 `.upload` 临时文件，再进入本状态机的 `.pending` 等待独立验证器领取；小文件保持一次性 `multipart/form-data` 直传。分片只改变字节送达方式，不改变任何验证或公开语义。
 
 成功验证时，文件先从 `.pending` 原子移动到公开目录，再条件更新数据库。若进程在两步之间中断，记录仍不可公开；租期回收后验证器会从公开路径重新验证并完成状态更新。
 

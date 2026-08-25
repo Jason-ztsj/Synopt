@@ -36,6 +36,7 @@ import {
   validateCanonicalUploadMetadata
 } from './media-upload.js';
 import { DiscussionRateLimiter } from './rate-limit.js';
+import { createUploadSessionManager } from './upload-sessions.js';
 import {
   validateDiscussionBody,
   validateDiscussionTitle,
@@ -380,6 +381,11 @@ export function createApp(options = {}) {
   const imageNormalizationGate = options.imageNormalizationGate ?? new CapacityGate({
     limit: config.imageNormalizationConcurrency,
     cooldownSeconds: config.imageNormalizationCooldownSeconds
+  });
+  const uploadSessions = options.uploadSessions ?? createUploadSessionManager({
+    temporaryStoragePath: config.temporaryStoragePath,
+    maxUploadBytes: config.maxUploadBytes,
+    chunkSize: config.mediaUploadChunkBytes
   });
   database.cleanupExpiredSessions?.(nowIso());
 
@@ -1368,11 +1374,69 @@ export function createApp(options = {}) {
     response.render('upload', { form: {}, error: '', maxUploadMb: config.maxUploadMb, ...catalogLocals() });
   });
 
+  const sessionErrorText = ({
+    MEDIA_TOO_LARGE: '文件超过上传上限。',
+    TOO_MANY_SESSIONS: '你有太多未完成的上传，请稍后再试。',
+    STORAGE_UNAVAILABLE: '服务器暂时无法保存上传内容。',
+    SESSION_INVALID: '上传会话无效或已过期。',
+    INDEX_INVALID: '分片序号无效。',
+    CHUNK_EMPTY: '分片内容为空。',
+    CHUNK_TOO_LARGE: '分片超过允许大小。',
+    SESSION_ALREADY_ASSEMBLED: '上传已经完成。',
+    CHUNK_MISSING: '缺失部分分片，无法组装。',
+    CHUNK_SIZE_MISMATCH: '分片大小不一致，无法组装。',
+    SIZE_MISMATCH: '上传总大小与声明不一致。',
+    ASSEMBLY_FAILED: '服务器组装文件失败。',
+    SESSION_NOT_ASSEMBLED: '上传尚未完成。'
+  });
+
+  app.post('/videos/media-session', requireAuthentication, (request, response, next) => {
+    try {
+      assertCsrf(request);
+      const result = uploadSessions.create({
+        userId: request.currentUser.id,
+        totalBytes: Number(request.body?.totalBytes),
+        fileName: String(request.body?.fileName ?? ''),
+        sourceFilename: String(request.body?.sourceFilename ?? ''),
+        mimeType: String(request.body?.mimeType ?? ''),
+        container: String(request.body?.container ?? ''),
+        videoCodec: String(request.body?.videoCodec ?? ''),
+        audioCodec: String(request.body?.audioCodec ?? ''),
+        operation: String(request.body?.operation ?? 'unknown')
+      });
+      if (result.error) throw new AppError(sessionErrorText[result.error] || '分片会话创建失败', 400, result.error);
+      response.status(201).json(result);
+    } catch (error) { next(error); }
+  });
+
+  const chunkBodyParser = express.raw({ type: 'application/octet-stream', limit: config.mediaUploadChunkBytes });
+  app.post('/videos/media-session/:id/chunks/:index', requireAuthentication, chunkBodyParser, (request, response, next) => {
+    try {
+      assertCsrf(request);
+      const result = uploadSessions.writeChunk({
+        sessionId: request.params.id,
+        userId: request.currentUser.id,
+        index: Number(request.params.index),
+        buffer: request.body
+      });
+      if (result.error) throw new AppError(sessionErrorText[result.error] || '分片写入失败', 400, result.error);
+      response.status(200).json({ ok: true });
+    } catch (error) { next(error); }
+  });
+
+  app.post('/videos/media-session/:id/complete', requireAuthentication, async (request, response, next) => {
+    try {
+      assertCsrf(request);
+      const result = await uploadSessions.assemble({ sessionId: request.params.id, userId: request.currentUser.id });
+      if (result.error) throw new AppError(sessionErrorText[result.error] || '分片组装失败', 400, result.error);
+      response.status(200).json({ ok: true });
+    } catch (error) { next(error); }
+  });
+
   app.post('/videos', requireAuthentication, (request, response, next) => {
     upload.fields([{ name: 'video', maxCount: 1 }, { name: 'cover', maxCount: 1 }])(request, response, async (uploadError) => {
-      const videoFile = request.files?.video?.[0];
       const coverFile = request.files?.cover?.[0];
-      let temporaryPath = videoFile?.path;
+      let temporaryPath;
       let coverTemporaryPath = coverFile?.path;
       let normalizedCoverPath;
       let stagedPath;
@@ -1399,6 +1463,16 @@ export function createApp(options = {}) {
             throw new ValidationError(`标签“${tag.name}”已停用或合并，请改用当前有效标签`, 'TAG_NOT_ACTIVE');
           }
         }
+        let videoFile = request.files?.video?.[0] ?? null;
+        if (!videoFile && request.body?.mediaSessionId) {
+          const consumed = uploadSessions.consume({
+            sessionId: String(request.body.mediaSessionId),
+            userId: request.currentUser.id
+          });
+          if (consumed.error) throw new AppError('分片文件不存在、已使用或已过期', 400, 'MEDIA_SESSION_NOT_READY');
+          videoFile = { path: consumed.path, size: consumed.size, originalname: consumed.originalname, mimetype: consumed.mimetype };
+        }
+        temporaryPath = videoFile?.path;
         if (!videoFile) throw new ValidationError('请选择一个视频文件', 'VIDEO_REQUIRED');
         const canonical = validateCanonicalUploadMetadata(videoFile.originalname, videoFile.mimetype);
         await validateCanonicalUploadHeader(temporaryPath, canonical.container);

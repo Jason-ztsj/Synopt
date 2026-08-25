@@ -22,7 +22,9 @@
       ? Math.floor(duration / 3600) + ' 小时 ' + Math.floor((duration % 3600) / 60) + ' 分钟'
       : (duration < 60 ? '不到 1 分钟' : Math.floor(duration / 60) + ' 分钟'))
     : '';
-  const formatLabel = `${({ avc: 'H.264', hevc: 'HEVC', vp9: 'VP9', av1: 'AV1', unknown: '历史媒体' })[video.videoCodec] || video.videoCodec}${video.audioCodec ? ' + ' + video.audioCodec.toUpperCase() : ''} · ${(video.container || 'mp4').toUpperCase()}`;
+  const codecNames = ({ avc: 'H.264', hevc: 'HEVC', vp8: 'VP8', vp9: 'VP9', av1: 'AV1', unknown: '历史媒体' });
+  const audioNames = ({ aac: 'AAC', opus: 'Opus', mp3: 'MP3', flac: 'FLAC' });
+  const formatLabel = `${codecNames[video.videoCodec] || video.videoCodec}${video.audioCodec ? ' + ' + (audioNames[video.audioCodec] || video.audioCodec.toUpperCase()) : ''} · ${(video.container || 'mp4').toUpperCase()}`;
   const discussionDate = function(value) {
     const date = value ? new Date(value) : null;
     return date && !Number.isNaN(date.getTime())
@@ -59,6 +61,7 @@
             你的浏览器不支持播放此视频。<a href="/videos/<%= videoId %>/media">直接打开视频文件</a>。
           </video>
         </section>
+        <% if (video.compatibility === 'limited') { %><div class="validation-banner validation-banner--warning" role="status"><strong>该视频格式兼容度较低</strong><p>此视频的音/视频编码在部分浏览器或设备上可能无法播放。</p></div><% } %>
       <% } else { %>
         <section class="validation-state" data-validation-watch data-status-url="/api/videos/<%= videoId %>/status" data-current-status="<%= video.validationStatus %>" aria-live="polite"><span class="validation-state__signal" aria-hidden="true"></span><p class="eyebrow"><span></span> 发布前安全检查</p><h2 data-validation-label><%= validationStatus.label %></h2><p><%= video.validationStatus === 'rejected' ? (video.validationSummary.message || '文件没有通过完整媒体验证。') : '服务器正在遍历媒体结构并完整解码；完成前不会公开。' %></p></section>
       <% } %>

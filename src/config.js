@@ -4,7 +4,8 @@ const DEFAULTS = Object.freeze({
   PORT: '3000',
   DATABASE_PATH: './data/gongying.sqlite',
   VIDEO_STORAGE_PATH: './data/videos',
-  MAX_UPLOAD_MB: '90',
+  MAX_UPLOAD_MB: '1024',
+  MEDIA_UPLOAD_CHUNK_MB: '16',
   DISCUSSION_COOLDOWN_SECONDS: '30',
   SESSION_TTL_HOURS: '168',
   SESSION_COOKIE_SECURE: 'false',
@@ -71,6 +72,7 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
   const databasePath = path.resolve(cwd, requiredText(read('DATABASE_PATH'), 'DATABASE_PATH'));
   const videoStoragePath = path.resolve(cwd, requiredText(read('VIDEO_STORAGE_PATH'), 'VIDEO_STORAGE_PATH'));
   const maxUploadMb = positiveNumber(read('MAX_UPLOAD_MB'), 'MAX_UPLOAD_MB');
+  const mediaUploadChunkMb = positiveNumber(read('MEDIA_UPLOAD_CHUNK_MB'), 'MEDIA_UPLOAD_CHUNK_MB');
   const cooldownSeconds = positiveInteger(read('DISCUSSION_COOLDOWN_SECONDS'), 'DISCUSSION_COOLDOWN_SECONDS');
   const sessionTtlHours = positiveInteger(read('SESSION_TTL_HOURS'), 'SESSION_TTL_HOURS', 8760);
   const sessionCookieSecure = booleanValue(read('SESSION_COOKIE_SECURE'), 'SESSION_COOKIE_SECURE');
@@ -125,6 +127,8 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
     pendingStoragePath: path.join(videoStoragePath, '.pending'),
     maxUploadMb,
     maxUploadBytes,
+    mediaUploadChunkMb,
+    mediaUploadChunkBytes: Math.floor(mediaUploadChunkMb * 1024 * 1024),
     discussionCooldownSeconds: cooldownSeconds,
     sessionTtlHours,
     sessionTtlMs: sessionTtlHours * 60 * 60 * 1000,
