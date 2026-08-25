@@ -1,0 +1,26 @@
+<%
+  const cmsReauthError = typeof error === 'string' ? error : (typeof error !== 'undefined' && error?.message ? error.message : '');
+  const cmsReauthNext = typeof nextPath === 'string' && nextPath.startsWith('/') && !nextPath.startsWith('//') ? nextPath : '/cms';
+  const cmsReauthCsrf = typeof csrfToken === 'string' ? csrfToken : '';
+%>
+<%- include('partials/head', { pageTitle: '重新验证身份｜同见管理后台' }) %>
+<body class="cms-page cms-page--reauth">
+  <a class="cms-skip-link" href="#cms-main">跳到主要内容</a>
+  <main class="cms-reauth" id="cms-main" tabindex="-1">
+    <a class="cms-brand cms-brand--center" href="/" aria-label="返回同见公开站点"><span class="cms-brand__mark" aria-hidden="true">同</span><span><strong>同见</strong><small>治理工作台</small></span></a>
+    <section class="cms-reauth-card" aria-labelledby="reauth-title">
+      <p class="cms-eyebrow">敏感操作保护</p>
+      <h1 id="reauth-title">重新验证你的身份</h1>
+      <p>管理后台会在短时间后再次要求密码。验证只更新当前后台会话，不会延长账号会话本身。</p>
+      <% if (cmsReauthError) { %><div class="cms-alert cms-alert--error" role="alert"><strong>验证失败</strong><p><%= cmsReauthError %></p></div><% } %>
+      <form class="cms-form" action="/cms/reauth" method="post">
+        <input type="hidden" name="_csrf" value="<%= cmsReauthCsrf %>">
+        <input type="hidden" name="next" value="<%= cmsReauthNext %>">
+        <label class="cms-field"><span>当前密码 <em>必填</em></span><input type="password" name="password" minlength="8" maxlength="128" autocomplete="current-password" autofocus required></label>
+        <button class="cms-button cms-button--primary cms-button--block" type="submit">验证并继续</button>
+      </form>
+      <a class="cms-back-link" href="/">取消并返回公开站点</a>
+    </section>
+  </main>
+</body>
+</html>

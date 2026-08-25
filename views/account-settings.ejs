@@ -18,6 +18,7 @@
   const replyEnabled = preferenceChecked('replyEnabled', 'reply_enabled', 'reply');
   const videoVoteEnabled = preferenceChecked('videoVoteEnabled', 'video_vote_enabled', 'videoVote');
   const systemEnabled = preferenceChecked('systemEnabled', 'system_enabled', 'system');
+  const settingsSuspended = settingsAccount.status === 'suspended';
 %>
 <%- include('partials/head', { pageTitle: '账号设置｜同见', pageDescription: '管理同见账号的密码、通知偏好和删除选项。' }) %>
 <body class="page page--account">
@@ -32,6 +33,7 @@
         <%- include('partials/account-navigation', { currentPath: '/account/settings' }) %>
         <div class="account-content account-content--settings">
           <%- include('partials/account-feedback') %>
+          <% if (settingsSuspended) { %><div class="alert alert--error" role="status"><p><strong>账号当前已暂停。</strong>你仍可修改密码、查看举报和决定、提交申诉或退出；其他账号写操作暂不可用。</p></div><% } %>
 
           <section class="account-panel" aria-labelledby="password-title">
             <header class="account-panel__heading"><div><span>01</span><h2 id="password-title">修改密码</h2></div><p>保存后，其他设备上的会话将失效，当前设备保持登录。</p></header>
@@ -44,7 +46,7 @@
             </form>
           </section>
 
-          <section class="account-panel" aria-labelledby="notification-settings-title">
+          <% if (!settingsSuspended) { %><section class="account-panel" aria-labelledby="notification-settings-title">
             <header class="account-panel__heading"><div><span>02</span><h2 id="notification-settings-title">通知偏好</h2></div><p>关闭某一类后不再产生新通知；重新开启不会补发历史消息。</p></header>
             <form class="account-form" action="/account/settings/notifications" method="post">
               <input type="hidden" name="_csrf" value="<%= settingsCsrf %>">
@@ -52,7 +54,7 @@
                 <legend class="visually-hidden">选择要接收的通知</legend>
                 <label class="setting-row"><span><strong>收到回复</strong><small>当其他人直接回复你的讨论或回复时提醒，不包含自己回复自己。</small></span><input type="checkbox" name="replyEnabled" value="1"<% if (replyEnabled) { %> checked<% } %>><i aria-hidden="true"></i></label>
                 <label class="setting-row"><span><strong>稿件获得认同或反对</strong><small>只告诉你反馈方向，不显示投票者身份；未读的同类反馈会聚合。</small></span><input type="checkbox" name="videoVoteEnabled" value="1"<% if (videoVoteEnabled) { %> checked<% } %>><i aria-hidden="true"></i></label>
-                <label class="setting-row"><span><strong>系统通知</strong><small>为今后的稿件审核、规则变更等消息预留；当前没有 CMS 发送端。</small></span><input type="checkbox" name="systemEnabled" value="1"<% if (systemEnabled) { %> checked<% } %>><i aria-hidden="true"></i></label>
+                <label class="setting-row"><span><strong>系统通知</strong><small>接收稿件审核决定、申诉结果和重要规则变更；关闭后不再生成新的同类通知。</small></span><input type="checkbox" name="systemEnabled" value="1"<% if (systemEnabled) { %> checked<% } %>><i aria-hidden="true"></i></label>
               </fieldset>
               <div class="account-form__actions"><button class="button button--primary" type="submit">保存通知偏好</button></div>
             </form>
@@ -86,7 +88,7 @@
                 </form>
               </div>
             </details>
-          </section>
+          </section><% } %>
         </div>
       </div>
     </main>

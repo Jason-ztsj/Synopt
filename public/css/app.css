@@ -26,6 +26,45 @@
   --serif: "Noto Serif SC", "Songti SC", SimSun, serif;
 }
 
+.report-disclosure {
+  margin-top: 1rem;
+  border-top: 1px solid var(--line, #d8d4ca);
+  padding-top: .75rem;
+}
+
+.report-disclosure > summary {
+  cursor: pointer;
+  color: var(--muted, #625f58);
+  font-size: .9rem;
+}
+
+.report-disclosure form {
+  display: grid;
+  gap: .75rem;
+  max-width: 36rem;
+  margin-top: .75rem;
+}
+
+.report-disclosure label {
+  display: grid;
+  gap: .35rem;
+  font-weight: 650;
+}
+
+.report-disclosure select,
+.report-disclosure textarea {
+  width: 100%;
+  border: 1px solid var(--line, #d8d4ca);
+  border-radius: .5rem;
+  background: var(--paper, #fff);
+  color: inherit;
+  padding: .65rem .75rem;
+  font: inherit;
+}
+
+.report-disclosure textarea { min-height: 7rem; resize: vertical; }
+.report-disclosure--discussion { margin-top: .65rem; }
+
 *,
 *::before,
 *::after {

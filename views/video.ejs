@@ -2,7 +2,8 @@
   const videoId = video.id;
   const description = typeof video.description === 'string' ? video.description.trim() : '';
   const ready = ['ready', 'ready_with_warnings'].includes(video.validationStatus);
-  const user = typeof currentUser !== 'undefined' && currentUser ? currentUser : null;
+  const signedInUser = typeof currentUser !== 'undefined' && currentUser ? currentUser : null;
+  const user = signedInUser && signedInUser.status === 'active' ? signedInUser : null;
   const deleted = Boolean(video.deletedAt || video.deleted_at);
   const withdrawn = Boolean(video.withdrawnAt || video.withdrawn_at);
   const isOwner = Boolean(user) && (Boolean(video.isOwner || video.is_owner) || (video.userId && user.id && video.userId === user.id));
@@ -73,9 +74,10 @@
             <% } else if (user) { %>
               <form action="/videos/<%= videoId %>/vote" method="post" data-vote-form data-vote-kind="up"><input type="hidden" name="_csrf" value="<%= safeCsrfToken %>"><input type="hidden" name="value" value="<%= video.viewerVote === 1 ? 0 : 1 %>"><button type="submit" class="reaction-button<% if (video.viewerVote === 1) { %> is-active<% } %>">认同 <strong data-upvotes><%= video.upvoteCount %></strong></button></form>
               <form action="/videos/<%= videoId %>/vote" method="post" data-vote-form data-vote-kind="down"><input type="hidden" name="_csrf" value="<%= safeCsrfToken %>"><input type="hidden" name="value" value="<%= video.viewerVote === -1 ? 0 : -1 %>"><button type="submit" class="reaction-button<% if (video.viewerVote === -1) { %> is-active is-negative<% } %>">反对 <strong data-downvotes><%= video.downvoteCount %></strong></button></form>
-            <% } else { %><a class="reaction-button" href="/login?next=<%= encodeURIComponent('/videos/' + videoId) %>">认同 <strong><%= video.upvoteCount %></strong></a><a class="reaction-button" href="/login?next=<%= encodeURIComponent('/videos/' + videoId) %>">反对 <strong><%= video.downvoteCount %></strong></a><% } %>
+            <% } else if (signedInUser) { %><span class="reaction-button reaction-button--static" title="账号暂停期间不能投票">认同 <strong><%= video.upvoteCount %></strong></span><span class="reaction-button reaction-button--static" title="账号暂停期间不能投票">反对 <strong><%= video.downvoteCount %></strong></span><% } else { %><a class="reaction-button" href="/login?next=<%= encodeURIComponent('/videos/' + videoId) %>">认同 <strong><%= video.upvoteCount %></strong></a><a class="reaction-button" href="/login?next=<%= encodeURIComponent('/videos/' + videoId) %>">反对 <strong><%= video.downvoteCount %></strong></a><% } %>
           </div>
         </div>
+        <% if (user && !isOwner && !withdrawn && video.moderationStatus === 'visible') { %><details class="report-disclosure"><summary>举报这段视频</summary><form action="/videos/<%= videoId %>/reports" method="post"><input type="hidden" name="_csrf" value="<%= safeCsrfToken %>"><label>问题类型<select name="reasonCategory" required><option value="">请选择</option><% Object.entries(typeof reportReasons !== 'undefined' ? reportReasons : {}).forEach(function(entry) { %><option value="<%= entry[0] %>"><%= entry[1] %></option><% }); %></select></label><label>具体说明（20–2000 字）<textarea name="description" minlength="20" maxlength="2000" required></textarea></label><button class="button button--quiet" type="submit">提交举报</button></form></details><% } %>
         <% if (video.tags.length) { %><div class="tag-row"><% video.tags.forEach(function(tag) { %><a href="/tags/<%= tag.slug %>">#<%= tag.name %></a><% }); %></div><% } %>
       </header>
 
@@ -91,11 +93,11 @@
 
         <% if (!deleted && !withdrawn) { %>
         <details class="topic-composer"<% if (errorMessage || discussionCount === 0) { %> open<% } %>>
-          <summary><span><strong><%= user ? '发起一个讨论' : '登录后参与讨论' %></strong><small><%= user ? '添加标题，让其他人先了解你想谈什么' : '观看始终开放，发言需要稳定账号' %></small></span><span aria-hidden="true">＋</span></summary>
+          <summary><span><strong><%= user ? '发起一个讨论' : (signedInUser ? '账号暂停期间不能发言' : '登录后参与讨论') %></strong><small><%= user ? '添加标题，让其他人先了解你想谈什么' : (signedInUser ? '你仍可浏览公开内容、查看处理决定和提交申诉' : '观看始终开放，发言需要稳定账号') %></small></span><span aria-hidden="true">＋</span></summary>
           <% if (errorMessage) { %><div class="alert alert--error alert--compact" role="alert"><p><%= errorMessage %></p></div><% } %>
           <% if (user) { %>
             <%- include('partials/discussion-composer', { videoId: videoId, safeCsrfToken: safeCsrfToken, parentId: null, composerId: 'topic-composer', replyTo: '' }) %>
-          <% } else { %><div class="discussion-auth-gate"><p>账号不要求邮箱或真实姓名，用来保持讨论身份和投票的一致性。</p><a class="button button--primary" href="/login?next=<%= encodeURIComponent('/videos/' + videoId) %>">登录后参与</a></div><% } %>
+          <% } else if (signedInUser) { %><div class="discussion-auth-gate"><p>账号暂停期间不能上传、投票或参与讨论；你仍可前往账号页查看处理决定并申诉。</p><a class="button button--primary" href="/account/appeals">查看处理决定与申诉</a></div><% } else { %><div class="discussion-auth-gate"><p>账号不要求邮箱或真实姓名，用来保持讨论身份和投票的一致性。</p><a class="button button--primary" href="/login?next=<%= encodeURIComponent('/videos/' + videoId) %>">登录后参与</a></div><% } %>
         </details>
         <% } %>
 

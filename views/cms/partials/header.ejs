@@ -1,0 +1,22 @@
+<%
+  const cmsHeaderUser = typeof currentUser !== 'undefined' && currentUser && typeof currentUser === 'object'
+    ? currentUser
+    : {};
+  const cmsHeaderName = cmsHeaderUser.displayName || cmsHeaderUser.display_name || cmsHeaderUser.username || '工作人员';
+  const cmsHeaderRole = cmsHeaderUser.role === 'administrator' ? '管理员' : '审核员';
+  const cmsHeaderCsrf = typeof csrfToken === 'string' ? csrfToken : '';
+%>
+<header class="cms-topbar">
+  <a class="cms-brand" href="/cms" aria-label="同见管理后台首页">
+    <span class="cms-brand__mark" aria-hidden="true">同</span>
+    <span><strong>同见</strong><small>治理工作台</small></span>
+  </a>
+  <div class="cms-topbar__actions">
+    <a class="cms-public-link" href="/">返回公开站点</a>
+    <span class="cms-identity"><strong><%= cmsHeaderName %></strong><small><%= cmsHeaderRole %></small></span>
+    <form action="/logout" method="post">
+      <input type="hidden" name="_csrf" value="<%= cmsHeaderCsrf %>">
+      <button class="cms-button cms-button--quiet cms-button--small" type="submit">退出</button>
+    </form>
+  </div>
+</header>

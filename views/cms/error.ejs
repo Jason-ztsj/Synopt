@@ -1,0 +1,15 @@
+<%
+  const cmsErrorStatus = Number(typeof status !== 'undefined' ? status : 500) || 500;
+  const cmsErrorTitle = typeof title === 'string' && title ? title : (cmsErrorStatus === 404 ? '找不到这项记录' : '管理操作未完成');
+  const cmsErrorMessage = typeof message === 'string' && message ? message : (typeof error === 'string' ? error : '服务暂时无法完成这个请求，请稍后再试。');
+  const cmsErrorRequestId = typeof requestId === 'string' ? requestId : '';
+%>
+<%- include('partials/page-start', { pageTitle: cmsErrorTitle + '｜同见管理后台', currentPath: typeof currentPath === 'string' ? currentPath : '/cms' }) %>
+  <section class="cms-error-page" aria-labelledby="cms-error-title">
+    <p class="cms-error-page__code">ERROR / <%= cmsErrorStatus %></p>
+    <h1 id="cms-error-title"><%= cmsErrorTitle %></h1>
+    <p><%= cmsErrorMessage %></p>
+    <% if (cmsErrorRequestId) { %><p class="cms-request-id">请求编号：<code><%= cmsErrorRequestId %></code></p><% } %>
+    <div class="cms-actions"><a class="cms-button cms-button--primary" href="/cms">返回治理概览</a><a class="cms-button cms-button--quiet" href="/">返回公开站点</a></div>
+  </section>
+<%- include('partials/page-end') %>

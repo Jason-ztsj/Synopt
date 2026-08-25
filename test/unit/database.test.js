@@ -49,6 +49,7 @@ function video(id, createdAt) {
     coverSource: null,
     visibility: 'public',
     moderationStatus: 'visible',
+    moderationVersion: 0,
     tags: [],
     upvoteCount: 0,
     downvoteCount: 0,
@@ -59,6 +60,38 @@ function video(id, createdAt) {
     deletedAt: null,
     createdAt
   };
+}
+
+function removeV5SchemaFromDowngradeFixture(database, { rebuildDiscussions = false } = {}) {
+  database.exec(`
+    DROP TRIGGER IF EXISTS case_notes_no_update;
+    DROP TRIGGER IF EXISTS case_notes_no_delete;
+    DROP TRIGGER IF EXISTS moderation_actions_no_update;
+    DROP TRIGGER IF EXISTS moderation_actions_no_delete;
+    DROP TRIGGER IF EXISTS audit_events_no_update;
+    DROP TRIGGER IF EXISTS audit_events_no_delete;
+    DROP TRIGGER IF EXISTS tags_no_self_merge_insert;
+    DROP TRIGGER IF EXISTS tags_no_self_merge_update;
+    DROP TABLE IF EXISTS cms_media_access_grants;
+    DROP TABLE IF EXISTS appeals;
+    DROP TABLE IF EXISTS moderation_actions;
+    DROP TABLE IF EXISTS case_notes;
+    DROP TABLE IF EXISTS moderation_cases;
+    DROP TABLE IF EXISTS audit_events;
+    DROP INDEX IF EXISTS idx_tags_active_name;
+    ALTER TABLE sessions DROP COLUMN cms_verified_at;
+    ALTER TABLE videos DROP COLUMN moderation_version;
+    ALTER TABLE tags DROP COLUMN updated_at;
+    ALTER TABLE tags DROP COLUMN merged_into_id;
+    ALTER TABLE tags DROP COLUMN is_active;
+    ALTER TABLE users DROP COLUMN governance_version;
+  `);
+  if (!rebuildDiscussions) {
+    database.exec(`
+      ALTER TABLE discussions DROP COLUMN moderation_version;
+      ALTER TABLE discussions DROP COLUMN moderation_status;
+    `);
+  }
 }
 
 test('SQLite 持久化映射正确，视频倒序、讨论正序且查询索引实际存在', async () => {
@@ -260,7 +293,7 @@ test('schema v0 无账号数据库迁移到最新版，并保留视频、讨论�
 
     database = openDatabase(databasePath);
     assert.equal(database.getSchemaVersion(), CURRENT_SCHEMA_VERSION);
-    assert.equal(CURRENT_SCHEMA_VERSION, 4);
+    assert.equal(CURRENT_SCHEMA_VERSION, 5);
     assert.equal(database.raw.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
     assert.deepEqual(database.raw.prepare('PRAGMA foreign_key_check').all(), []);
     const migratedVideo = database.getVideo('legacy-video');
@@ -353,7 +386,7 @@ test('schema v1 带账号数据迁移到最新版，完整保留账号、会话�
     v1.close();
 
     database = openDatabase(databasePath);
-    assert.equal(database.getSchemaVersion(), 4);
+    assert.equal(database.getSchemaVersion(), CURRENT_SCHEMA_VERSION);
     assert.equal(database.raw.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
     assert.deepEqual(database.raw.prepare('PRAGMA foreign_key_check').all(), []);
 
@@ -720,6 +753,18 @@ test('公开个人页的讨论和获票统计不泄露私有、撤回、隐藏�
     assert.equal(profile.discussionCount, 1);
     assert.equal(profile.receivedUpvoteCount, 1);
     assert.equal(profile.receivedDownvoteCount, 0);
+    const publicDiscussion = database.raw.prepare(
+      "SELECT id FROM discussions WHERE video_id = 'profile-public'"
+    ).get();
+    database.raw.prepare("UPDATE discussions SET moderation_status = 'hidden' WHERE id = ?")
+      .run(publicDiscussion.id);
+    assert.equal(database.getPublicUserProfile(owner.username).discussionCount, 0);
+    database.raw.prepare("UPDATE discussions SET moderation_status = 'visible' WHERE id = ?")
+      .run(publicDiscussion.id);
+    assert.equal(database.getPublicUserProfile(owner.username).discussionCount, 1);
+    database.raw.prepare("UPDATE discussions SET moderation_status = 'removed' WHERE id = ?")
+      .run(publicDiscussion.id);
+    assert.equal(database.getPublicUserProfile(owner.username).discussionCount, 0);
   } finally {
     database?.close();
     await rm(directory, { recursive: true, force: true });
@@ -831,9 +876,10 @@ test('账号资料、头像、稿件分页、撤回重发和永久删除保持�
     assert.equal(database.withdrawVideo(
       'managed-hidden', owner.id, '2026-08-23T11:18:00.000Z'
     ).archivePublic, false);
-    database.markVideoPermanentlyDeleted(
+    assert.equal(database.markVideoPermanentlyDeleted(
       'managed-hidden', owner.id, '2026-08-23T11:19:00.000Z'
-    );
+    ), null, '审核隐藏中的视频必须保留为治理证据');
+    assert.equal(database.getVideo('managed-hidden').deletedAt, null);
     assert.equal(database.getVideo('managed-hidden').archivePublic, false);
 
     database.insertVideo({
@@ -847,14 +893,15 @@ test('账号资料、头像、稿件分页、撤回重发和永久删除保持�
       UPDATE videos SET moderation_status = 'hidden'
       WHERE id = 'managed-hidden-after-withdraw'
     `).run();
-    database.markVideoPermanentlyDeleted(
+    assert.equal(database.markVideoPermanentlyDeleted(
       'managed-hidden-after-withdraw', owner.id, '2026-08-23T11:22:00.000Z'
-    );
+    ), null, '撤回后被审核隐藏的内容仍须保留为治理证据');
     assert.equal(
       database.getVideo('managed-hidden-after-withdraw').archivePublic,
-      false,
-      '撤回后若被审核隐藏，永久删除档案也不可公开'
+      true,
+      '拒绝永久删除时不得改写撤回前的归档事实'
     );
+    assert.equal(database.getVideo('managed-hidden-after-withdraw').deletedAt, null);
 
     database.insertVideo({
       ...video('managed-rejected-after-withdraw', '2026-08-23T11:23:00.000Z'),
@@ -1405,7 +1452,7 @@ test('注销账号可选择保留或清除内容，并撤销会话、投票、�
   }
 });
 
-test('schema v3 迁移到 v4 保留树状讨论和投票，并更换父级删除约束', async () => {
+test('schema v3 迁移到最新版保留树状讨论和投票，并更换父级删除约束', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'tongjian-v3-migration-test-'));
   const databasePath = path.join(directory, 'v3.sqlite');
   let database;
@@ -1429,6 +1476,9 @@ test('schema v3 迁移到 v4 保留树状讨论和投票，并更换父级删除
     seed.raw.exec(`
       PRAGMA foreign_keys = OFF;
       BEGIN IMMEDIATE;
+    `);
+    removeV5SchemaFromDowngradeFixture(seed.raw, { rebuildDiscussions: true });
+    seed.raw.exec(`
       DROP TABLE notification_vote_actors;
       DROP TABLE notifications;
       DROP TABLE notification_preferences;
@@ -1476,7 +1526,7 @@ test('schema v3 迁移到 v4 保留树状讨论和投票，并更换父级删除
     seed.close();
 
     database = openDatabase(databasePath);
-    assert.equal(database.getSchemaVersion(), 4);
+    assert.equal(database.getSchemaVersion(), CURRENT_SCHEMA_VERSION);
     assert.equal(database.getUserById(user.id).bio, '');
     assert.equal(database.getVideo('v3-video').withdrawnAt, null);
     assert.equal(database.getDiscussion(parent.id).editCount, 0);
@@ -1496,7 +1546,7 @@ test('schema v3 迁移到 v4 保留树状讨论和投票，并更换父级删除
   }
 });
 
-test('已标记为 v4 的旧数据库会幂等补建删除队列和公开档案字段', async () => {
+test('已标记为 v4 的旧数据库会补建旧字段并幂等迁移到最新版', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'tongjian-v4-supplement-test-'));
   const databasePath = path.join(directory, 'v4.sqlite');
   let database;
@@ -1506,6 +1556,11 @@ test('已标记为 v4 的旧数据库会幂等补建删除队列和公开档案�
     seed.close();
 
     const oldV4 = new DatabaseSync(databasePath);
+    oldV4.exec(`
+      PRAGMA foreign_keys = OFF;
+      BEGIN IMMEDIATE;
+    `);
+    removeV5SchemaFromDowngradeFixture(oldV4);
     oldV4.exec(`
       DROP TABLE file_deletion_queue;
       CREATE TABLE file_deletion_queue (
@@ -1527,11 +1582,13 @@ test('已标记为 v4 的旧数据库会幂等补建删除队列和公开档案�
       DROP TABLE notification_vote_actors;
       ALTER TABLE videos DROP COLUMN archive_public;
       PRAGMA user_version = 4;
+      COMMIT;
+      PRAGMA foreign_keys = ON;
     `);
     oldV4.close();
 
     database = openDatabase(databasePath);
-    assert.equal(database.getSchemaVersion(), 4);
+    assert.equal(database.getSchemaVersion(), CURRENT_SCHEMA_VERSION);
     assert.ok(database.raw.prepare("PRAGMA table_info('videos')").all()
       .some((column) => column.name === 'archive_public'));
     assert.deepEqual(
@@ -1555,7 +1612,54 @@ test('已标记为 v4 的旧数据库会幂等补建删除队列和公开档案�
 
     database.close();
     database = openDatabase(databasePath);
-    assert.equal(database.listPendingFileDeletions().length, 2, '重复打开 v4 数据库不会清空或重复队列');
+    assert.equal(database.listPendingFileDeletions().length, 2, '重复打开迁移后数据库不会清空或重复队列');
+  } finally {
+    database?.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('最后一名有效管理员不能注销，存在另一名有效管理员后才允许注销', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'tongjian-last-admin-delete-test-'));
+  let database;
+  try {
+    database = openDatabase(path.join(directory, 'last-admin-delete.sqlite'));
+    const first = database.createUser({
+      id: 'last-admin-delete-first',
+      username: 'last_admin_delete_first',
+      displayName: '首位管理员',
+      passwordHash: 'hash',
+      createdAt: '2026-08-25T09:00:00.000Z'
+    });
+    database.raw.prepare("UPDATE users SET role = 'administrator' WHERE id = ?").run(first.id);
+
+    const refused = database.deleteAccount(first.id, {
+      deleteVideos: false,
+      deleteDiscussions: false,
+      deletedAt: '2026-08-25T09:01:00.000Z'
+    });
+    assert.equal(refused, null);
+    assert.equal(database.getUserById(first.id).status, 'active');
+    assert.equal(database.getUserById(first.id).deletedAt, null);
+
+    const second = database.createUser({
+      id: 'last-admin-delete-second',
+      username: 'last_admin_delete_second',
+      displayName: '第二位管理员',
+      passwordHash: 'hash',
+      createdAt: '2026-08-25T09:02:00.000Z'
+    });
+    database.raw.prepare("UPDATE users SET role = 'administrator' WHERE id = ?").run(second.id);
+
+    const deleted = database.deleteAccount(first.id, {
+      deleteVideos: false,
+      deleteDiscussions: false,
+      deletedAt: '2026-08-25T09:03:00.000Z'
+    });
+    assert.ok(deleted);
+    assert.equal(database.getUserById(first.id).status, 'disabled');
+    assert.equal(database.getUserById(first.id).deletedAt, '2026-08-25T09:03:00.000Z');
+    assert.equal(database.getUserById(second.id).status, 'active');
   } finally {
     database?.close();
     await rm(directory, { recursive: true, force: true });

@@ -12,6 +12,7 @@
     "dev": "node --watch src/index.js",
     "validator": "node src/validator-worker.js",
     "validator:once": "node src/validator-worker.js --once",
+    "admin:grant": "node --env-file-if-exists=.env src/grant-admin.js",
     "test": "node --test --test-concurrency=1",
     "test:unit": "node --test --test-concurrency=1 test/unit/*.test.js",
     "test:integration": "node --test --test-concurrency=1 test/integration/*.test.js"

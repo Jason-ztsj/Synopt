@@ -1,0 +1,28 @@
+<%- include('partials/head', { pageTitle: '我的举报｜同见', pageDescription: '查看你提交的内容举报及公开处理结果。' }) %>
+<body class="page page--account">
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  <%- include('partials/header', { currentPath: currentPath }) %>
+  <div class="account-shell shell">
+    <aside class="account-sidebar"><%- include('partials/account-navigation', { currentPath: currentPath }) %></aside>
+    <main id="main-content" class="account-main" tabindex="-1">
+      <header class="account-page-heading"><p class="eyebrow"><span></span> 平台治理</p><h1>我的举报</h1><p>这里只显示案件进度、最终结果和公开说明；内部备注、工作人员身份与敏感证据不会公开。</p></header>
+      <% if (createdId) { %><div class="alert alert--success" role="status"><p>举报已提交，案件编号为 <strong>#<%= createdId %></strong>。</p></div><% } %>
+      <section class="account-panel" aria-labelledby="report-list-title">
+        <h2 id="report-list-title">举报记录</h2>
+        <% if (!reports.length) { %><p class="account-empty">你还没有提交过举报。</p><% } %>
+        <div class="account-card-list">
+          <% reports.forEach(function(report) { %>
+            <article class="account-card">
+              <div><strong>#<%= report.id %> · <%= report.videoTitle || report.discussionTitle || '内容记录' %></strong><small><%= reportReasons[report.reasonCategory] || report.reasonCategory %> · <time datetime="<%= report.createdAt %>"><%= new Date(report.createdAt).toLocaleDateString('zh-CN') %></time></small></div>
+              <p>状态：<%= ({ open: '待处理', in_review: '审核中', resolved: '已结案' })[report.status] || report.status %></p>
+              <% if (report.resolution) { %><p><strong><%= report.resolution === 'violation_confirmed' ? '确认违反规则' : '未发现违规' %></strong></p><p><%= report.publicExplanation %></p><% } %>
+            </article>
+          <% }); %>
+        </div>
+      </section>
+      <% if (pagination.totalPages > 1) { %><nav class="pagination" aria-label="举报分页"><% if (pagination.hasPrevious) { %><a href="?page=<%= pagination.page - 1 %>">上一页</a><% } %><span>第 <%= pagination.page %> / <%= pagination.totalPages %> 页</span><% if (pagination.hasNext) { %><a href="?page=<%= pagination.page + 1 %>">下一页</a><% } %></nav><% } %>
+    </main>
+  </div>
+  <%- include('partials/footer') %>
+</body>
+</html>

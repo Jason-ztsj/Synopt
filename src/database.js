@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { createGovernanceStore } from './governance-store.js';
 
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 5;
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 100;
@@ -10,6 +11,7 @@ const FILE_DELETION_KINDS = new Set(['video', 'cover', 'avatar']);
 const MAX_FILE_DELETION_ERROR_LENGTH = 2000;
 const FILE_DELETION_INITIAL_BACKOFF_MS = 5_000;
 const FILE_DELETION_MAX_BACKOFF_MS = 6 * 60 * 60 * 1000;
+const DEFAULT_GOVERNANCE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 function requireSha256Hash(value, name) {
   if (typeof value !== 'string' || !SHA256_HEX_PATTERN.test(value)) {
@@ -20,6 +22,7 @@ function requireSha256Hash(value, name) {
 
 function mapVideo(row) {
   if (!row) return null;
+  const deleted = row.deleted_at !== null && row.deleted_at !== undefined;
   return {
     id: row.id,
     title: row.title,
@@ -48,11 +51,11 @@ function mapVideo(row) {
     sourceVideoCodec: row.source_video_codec ?? null,
     sourceAudioCodec: row.source_audio_codec ?? null,
     ingestOperation: row.ingest_operation ?? 'unknown',
-    userId: row.user_id ?? null,
-    accountUsername: row.account_username ?? null,
-    accountDisplayName: row.account_display_name ?? null,
-    accountAvatarStorageName: row.account_avatar_storage_name ?? null,
-    accountAvatarMediaType: row.account_avatar_media_type ?? null,
+    userId: deleted ? null : (row.user_id ?? null),
+    accountUsername: deleted ? null : (row.account_username ?? null),
+    accountDisplayName: deleted ? null : (row.account_display_name ?? null),
+    accountAvatarStorageName: deleted ? null : (row.account_avatar_storage_name ?? null),
+    accountAvatarMediaType: deleted ? null : (row.account_avatar_media_type ?? null),
     categoryId: row.category_id ?? null,
     categorySlug: row.category_slug ?? null,
     categoryName: row.category_name ?? null,
@@ -61,6 +64,7 @@ function mapVideo(row) {
     coverSource: row.cover_source ?? null,
     visibility: row.visibility ?? 'public',
     moderationStatus: row.moderation_status ?? 'visible',
+    moderationVersion: row.moderation_version ?? 0,
     tags: typeof row.tag_list === 'string' && row.tag_list
       ? row.tag_list.split('\u001f').map((entry) => {
         const [slug, name] = entry.split('\u001e');
@@ -104,21 +108,24 @@ function parseJsonObject(value) {
 
 function mapDiscussion(row) {
   if (!row) return null;
+  const deleted = row.deleted_at !== null && row.deleted_at !== undefined;
   return {
     id: row.id,
     videoId: row.video_id,
     nickname: row.nickname,
     bodyMarkdown: row.body_markdown,
-    userId: row.user_id ?? null,
-    accountUsername: row.account_username ?? null,
-    accountDisplayName: row.account_display_name ?? null,
-    accountAvatarStorageName: row.account_avatar_storage_name ?? null,
-    accountAvatarMediaType: row.account_avatar_media_type ?? null,
+    userId: deleted ? null : (row.user_id ?? null),
+    accountUsername: deleted ? null : (row.account_username ?? null),
+    accountDisplayName: deleted ? null : (row.account_display_name ?? null),
+    accountAvatarStorageName: deleted ? null : (row.account_avatar_storage_name ?? null),
+    accountAvatarMediaType: deleted ? null : (row.account_avatar_media_type ?? null),
     title: row.title ?? null,
     parentId: row.parent_id ?? null,
     editedAt: row.edited_at ?? null,
     editCount: row.edit_count ?? 0,
     deletedAt: row.deleted_at ?? null,
+    moderationStatus: row.moderation_status ?? 'visible',
+    moderationVersion: row.moderation_version ?? 0,
     videoTitle: row.video_title ?? null,
     replyCount: row.reply_count ?? 0,
     upvoteCount: row.upvote_count ?? 0,
@@ -140,6 +147,7 @@ function mapUser(row) {
     avatarMediaType: row.avatar_media_type ?? null,
     role: row.role ?? 'member',
     status: row.status ?? 'active',
+    governanceVersion: row.governance_version ?? 0,
     updatedAt: row.updated_at ?? row.created_at,
     deletedAt: row.deleted_at ?? null,
     createdAt: row.created_at
@@ -195,6 +203,7 @@ function mapSession(row) {
     csrfTokenHash: row.csrf_token_hash,
     createdAt: row.created_at,
     expiresAt: row.expires_at,
+    cmsVerifiedAt: row.cms_verified_at ?? null,
     user: {
       id: row.user_id,
       username: row.account_username,
@@ -204,6 +213,7 @@ function mapSession(row) {
       avatarMediaType: row.account_avatar_media_type ?? null,
       role: row.account_role ?? 'member',
       status: row.account_status ?? 'active',
+      governanceVersion: row.account_governance_version ?? 0,
       updatedAt: row.account_updated_at ?? row.account_created_at,
       deletedAt: row.account_deleted_at ?? null,
       createdAt: row.account_created_at
@@ -237,6 +247,13 @@ function validateFileDeletionTarget(kind, storageName) {
   ) {
     throw new TypeError('待删除文件名必须是安全的存储文件名');
   }
+}
+
+function governanceRetentionCutoff(deletedAt, suppliedCutoff) {
+  if (typeof suppliedCutoff === 'string' && Number.isFinite(Date.parse(suppliedCutoff))) return suppliedCutoff;
+  const timestamp = Date.parse(deletedAt);
+  if (!Number.isFinite(timestamp)) throw new TypeError('删除时间无效');
+  return new Date(timestamp - DEFAULT_GOVERNANCE_RETENTION_MS).toISOString();
 }
 
 function nextFileDeletionAttemptAt(failedAt, attemptCount) {
@@ -724,6 +741,231 @@ function ensureV4SupplementalSchema(database) {
   }
 }
 
+function migrateToV5(database) {
+  database.exec('PRAGMA foreign_keys = OFF');
+  database.exec('BEGIN IMMEDIATE');
+  try {
+    // Another process may have completed the migration while this connection
+    // waited for the write lock. Re-read the version after BEGIN IMMEDIATE.
+    if (database.prepare('PRAGMA user_version').get().user_version >= 5) {
+      database.exec('COMMIT');
+      return;
+    }
+    if (!hasColumn(database, 'sessions', 'cms_verified_at')) {
+      database.exec('ALTER TABLE sessions ADD COLUMN cms_verified_at TEXT');
+    }
+    if (!hasColumn(database, 'videos', 'moderation_version')) {
+      database.exec('ALTER TABLE videos ADD COLUMN moderation_version INTEGER NOT NULL DEFAULT 0 CHECK (moderation_version >= 0)');
+    }
+    if (!hasColumn(database, 'discussions', 'moderation_status')) {
+      database.exec("ALTER TABLE discussions ADD COLUMN moderation_status TEXT NOT NULL DEFAULT 'visible' CHECK (moderation_status IN ('visible', 'hidden', 'removed'))");
+    }
+    if (!hasColumn(database, 'discussions', 'moderation_version')) {
+      database.exec('ALTER TABLE discussions ADD COLUMN moderation_version INTEGER NOT NULL DEFAULT 0 CHECK (moderation_version >= 0)');
+    }
+    if (!hasColumn(database, 'users', 'governance_version')) {
+      database.exec('ALTER TABLE users ADD COLUMN governance_version INTEGER NOT NULL DEFAULT 0 CHECK (governance_version >= 0)');
+    }
+    if (!hasColumn(database, 'tags', 'is_active')) {
+      database.exec('ALTER TABLE tags ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1))');
+    }
+    if (!hasColumn(database, 'tags', 'merged_into_id')) {
+      database.exec('ALTER TABLE tags ADD COLUMN merged_into_id INTEGER REFERENCES tags(id) ON DELETE RESTRICT');
+    }
+    if (!hasColumn(database, 'tags', 'updated_at')) {
+      database.exec('ALTER TABLE tags ADD COLUMN updated_at TEXT');
+    }
+    database.exec('UPDATE tags SET updated_at = created_at WHERE updated_at IS NULL');
+
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS moderation_cases (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source TEXT NOT NULL CHECK (source IN ('report', 'investigation')),
+        reporter_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        opened_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        video_id TEXT REFERENCES videos(id) ON DELETE RESTRICT,
+        discussion_id INTEGER REFERENCES discussions(id) ON DELETE RESTRICT,
+        reason_category TEXT NOT NULL CHECK (reason_category IN (
+          'spam_fraud', 'harassment_hate', 'illegal_dangerous',
+          'privacy_copyright', 'impersonation_metadata', 'other'
+        )),
+        description TEXT NOT NULL CHECK (length(description) BETWEEN 20 AND 2000),
+        status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'in_review', 'resolved')),
+        assignee_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        resolution TEXT CHECK (resolution IS NULL OR resolution IN ('violation_confirmed', 'no_violation')),
+        public_explanation TEXT CHECK (public_explanation IS NULL OR length(public_explanation) BETWEEN 1 AND 2000),
+        version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        resolved_at TEXT,
+        CHECK ((video_id IS NOT NULL) + (discussion_id IS NOT NULL) = 1),
+        CHECK ((source = 'report' AND reporter_user_id IS NOT NULL) OR source = 'investigation'),
+        CHECK (
+          (status != 'resolved' AND resolution IS NULL AND resolved_at IS NULL)
+          OR (status = 'resolved' AND resolution IS NOT NULL AND public_explanation IS NOT NULL AND resolved_at IS NOT NULL)
+        )
+      ) STRICT;
+    `);
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS case_notes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        case_id INTEGER NOT NULL REFERENCES moderation_cases(id) ON DELETE RESTRICT,
+        author_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        body TEXT NOT NULL CHECK (length(body) BETWEEN 1 AND 4000),
+        created_at TEXT NOT NULL
+      ) STRICT;
+    `);
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS moderation_actions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        case_id INTEGER REFERENCES moderation_cases(id) ON DELETE RESTRICT,
+        actor_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        actor_label TEXT,
+        affected_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        video_id TEXT REFERENCES videos(id) ON DELETE RESTRICT,
+        discussion_id INTEGER REFERENCES discussions(id) ON DELETE RESTRICT,
+        user_id TEXT REFERENCES users(id) ON DELETE RESTRICT,
+        action TEXT NOT NULL CHECK (action IN (
+          'video_hide', 'video_remove', 'video_restore',
+          'discussion_hide', 'discussion_remove', 'discussion_restore',
+          'user_suspend', 'user_restore', 'user_role', 'user_sessions_revoke', 'appeal_overturn'
+        )),
+        public_reason TEXT NOT NULL CHECK (length(public_reason) BETWEEN 1 AND 2000),
+        internal_note TEXT NOT NULL CHECK (length(internal_note) BETWEEN 1 AND 4000),
+        before_json TEXT NOT NULL DEFAULT '{}',
+        after_json TEXT NOT NULL DEFAULT '{}',
+        before_version INTEGER NOT NULL CHECK (before_version >= 0),
+        after_version INTEGER NOT NULL CHECK (after_version >= 0),
+        reverses_action_id INTEGER REFERENCES moderation_actions(id) ON DELETE RESTRICT,
+        created_at TEXT NOT NULL,
+        CHECK ((video_id IS NOT NULL) + (discussion_id IS NOT NULL) + (user_id IS NOT NULL) = 1),
+        CHECK (actor_user_id IS NOT NULL OR actor_label IS NOT NULL)
+      ) STRICT;
+    `);
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS appeals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        moderation_action_id INTEGER NOT NULL UNIQUE REFERENCES moderation_actions(id) ON DELETE RESTRICT,
+        appellant_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+        reason TEXT NOT NULL CHECK (length(reason) BETWEEN 20 AND 2000),
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_review', 'resolved')),
+        result TEXT CHECK (result IS NULL OR result IN ('upheld', 'overturned')),
+        reviewer_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        public_explanation TEXT CHECK (public_explanation IS NULL OR length(public_explanation) BETWEEN 1 AND 2000),
+        has_state_conflict INTEGER NOT NULL DEFAULT 0 CHECK (has_state_conflict IN (0, 1)),
+        version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        resolved_at TEXT,
+        CHECK (
+          (status != 'resolved' AND result IS NULL AND resolved_at IS NULL)
+          OR (status = 'resolved' AND result IS NOT NULL AND public_explanation IS NOT NULL AND resolved_at IS NOT NULL)
+        )
+      ) STRICT;
+    `);
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS audit_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        actor_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        actor_label TEXT,
+        request_id TEXT NOT NULL CHECK (length(request_id) BETWEEN 1 AND 128),
+        action TEXT NOT NULL CHECK (length(action) BETWEEN 1 AND 120),
+        object_type TEXT NOT NULL CHECK (length(object_type) BETWEEN 1 AND 40),
+        object_id TEXT NOT NULL CHECK (length(object_id) BETWEEN 1 AND 128),
+        before_json TEXT NOT NULL DEFAULT '{}',
+        after_json TEXT NOT NULL DEFAULT '{}',
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        CHECK (actor_user_id IS NOT NULL OR actor_label IS NOT NULL)
+      ) STRICT;
+    `);
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS cms_media_access_grants (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_token_hash TEXT NOT NULL REFERENCES sessions(token_hash) ON DELETE CASCADE,
+        case_id INTEGER NOT NULL REFERENCES moderation_cases(id) ON DELETE CASCADE,
+        video_id TEXT NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+        granted_by_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        reason TEXT NOT NULL CHECK (length(reason) BETWEEN 1 AND 1000),
+        granted_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        UNIQUE (session_token_hash, case_id, video_id)
+      ) STRICT;
+    `);
+
+    database.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_open_video_reporter_case
+      ON moderation_cases(reporter_user_id, video_id)
+      WHERE source = 'report' AND video_id IS NOT NULL AND status != 'resolved'
+    `);
+    database.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_open_discussion_reporter_case
+      ON moderation_cases(reporter_user_id, discussion_id)
+      WHERE source = 'report' AND discussion_id IS NOT NULL AND status != 'resolved'
+    `);
+    database.exec('CREATE INDEX IF NOT EXISTS idx_cases_status_created ON moderation_cases(status, created_at DESC, id DESC)');
+    database.exec('CREATE INDEX IF NOT EXISTS idx_cases_assignee_status ON moderation_cases(assignee_user_id, status, updated_at DESC)');
+    database.exec('CREATE INDEX IF NOT EXISTS idx_case_notes_case_created ON case_notes(case_id, created_at ASC, id ASC)');
+    database.exec('CREATE INDEX IF NOT EXISTS idx_actions_case_created ON moderation_actions(case_id, created_at DESC, id DESC)');
+    database.exec('CREATE INDEX IF NOT EXISTS idx_actions_affected_created ON moderation_actions(affected_user_id, created_at DESC, id DESC)');
+    database.exec('CREATE INDEX IF NOT EXISTS idx_appeals_status_created ON appeals(status, created_at DESC, id DESC)');
+    database.exec('CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_events(created_at DESC, id DESC)');
+    database.exec('CREATE INDEX IF NOT EXISTS idx_audit_actor_created ON audit_events(actor_user_id, created_at DESC, id DESC)');
+    database.exec('CREATE INDEX IF NOT EXISTS idx_audit_object_created ON audit_events(object_type, object_id, created_at DESC, id DESC)');
+    database.exec('CREATE INDEX IF NOT EXISTS idx_media_grants_lookup ON cms_media_access_grants(session_token_hash, case_id, video_id, expires_at)');
+    database.exec('CREATE INDEX IF NOT EXISTS idx_tags_active_name ON tags(is_active, name COLLATE NOCASE, id)');
+
+    database.exec(`
+      CREATE TRIGGER IF NOT EXISTS case_notes_no_update BEFORE UPDATE ON case_notes
+      BEGIN SELECT RAISE(ABORT, 'case notes are append-only'); END
+    `);
+    database.exec(`
+      CREATE TRIGGER IF NOT EXISTS case_notes_no_delete BEFORE DELETE ON case_notes
+      BEGIN SELECT RAISE(ABORT, 'case notes are append-only'); END
+    `);
+    database.exec(`
+      CREATE TRIGGER IF NOT EXISTS moderation_actions_no_update BEFORE UPDATE ON moderation_actions
+      BEGIN SELECT RAISE(ABORT, 'moderation actions are append-only'); END
+    `);
+    database.exec(`
+      CREATE TRIGGER IF NOT EXISTS moderation_actions_no_delete BEFORE DELETE ON moderation_actions
+      BEGIN SELECT RAISE(ABORT, 'moderation actions are append-only'); END
+    `);
+    database.exec(`
+      CREATE TRIGGER IF NOT EXISTS audit_events_no_update BEFORE UPDATE ON audit_events
+      BEGIN SELECT RAISE(ABORT, 'audit events are append-only'); END
+    `);
+    database.exec(`
+      CREATE TRIGGER IF NOT EXISTS audit_events_no_delete BEFORE DELETE ON audit_events
+      BEGIN SELECT RAISE(ABORT, 'audit events are append-only'); END
+    `);
+
+    const foreignKeyErrors = database.prepare('PRAGMA foreign_key_check').all();
+    if (foreignKeyErrors.length > 0) throw new Error('数据库 v5 迁移后的外键检查失败');
+    database.exec('PRAGMA user_version = 5');
+    database.exec('COMMIT');
+  } catch (error) {
+    database.exec('ROLLBACK');
+    throw error;
+  } finally {
+    database.exec('PRAGMA foreign_keys = ON');
+  }
+}
+
+function ensureV5GovernanceConstraints(database) {
+  database.exec(`
+    CREATE TRIGGER IF NOT EXISTS tags_no_self_merge_insert
+    BEFORE INSERT ON tags
+    WHEN NEW.merged_into_id IS NOT NULL AND NEW.merged_into_id = NEW.id
+    BEGIN SELECT RAISE(ABORT, 'tag cannot merge into itself'); END;
+
+    CREATE TRIGGER IF NOT EXISTS tags_no_self_merge_update
+    BEFORE UPDATE OF merged_into_id ON tags
+    WHEN NEW.merged_into_id IS NOT NULL AND NEW.merged_into_id = NEW.id
+    BEGIN SELECT RAISE(ABORT, 'tag cannot merge into itself'); END;
+  `);
+}
+
 function migrate(database) {
   let version = database.prepare('PRAGMA user_version').get().user_version;
   if (version > CURRENT_SCHEMA_VERSION) {
@@ -741,8 +983,13 @@ function migrate(database) {
     migrateToV3(database);
     version = 3;
   }
-  if (version < 4) migrateToV4(database);
+  if (version < 4) {
+    migrateToV4(database);
+    version = 4;
+  }
   ensureV4SupplementalSchema(database);
+  if (version < 5) migrateToV5(database);
+  ensureV5GovernanceConstraints(database);
 }
 
 export function openDatabase(databasePath) {
@@ -775,7 +1022,7 @@ export function openDatabase(databasePath) {
           SELECT t.slug, t.name
           FROM video_tags AS vt
           JOIN tags AS t ON t.id = vt.tag_id
-          WHERE vt.video_id = v.id
+          WHERE vt.video_id = v.id AND t.is_active = 1 AND t.merged_into_id IS NULL
           ORDER BY vt.sort_order ASC, t.id ASC
         ) AS tag_row
       ) AS tag_list,
@@ -784,7 +1031,7 @@ export function openDatabase(databasePath) {
       (SELECT count(*) FROM discussions AS vd WHERE vd.video_id = v.id AND vd.deleted_at IS NULL) AS discussion_count
     FROM videos AS v
     LEFT JOIN users AS u ON u.id = v.user_id
-    LEFT JOIN categories AS c ON c.id = v.category_id
+    LEFT JOIN categories AS c ON c.id = v.category_id AND c.is_active = 1
   `;
   const discussionSelect = `
     SELECT
@@ -811,6 +1058,7 @@ export function openDatabase(databasePath) {
       u.avatar_media_type AS account_avatar_media_type,
       u.role AS account_role,
       u.status AS account_status,
+      u.governance_version AS account_governance_version,
       u.updated_at AS account_updated_at,
       u.deleted_at AS account_deleted_at,
       u.created_at AS account_created_at
@@ -909,6 +1157,7 @@ export function openDatabase(databasePath) {
       FROM discussions AS d
       JOIN videos AS v ON v.id = d.video_id
       WHERE d.id = ? AND d.deleted_at IS NULL
+        AND d.moderation_status = 'visible'
         AND v.validation_status IN ('ready', 'ready_with_warnings')
         AND v.visibility = 'public' AND v.moderation_status = 'visible'
         AND v.withdrawn_at IS NULL AND v.deleted_at IS NULL
@@ -916,6 +1165,7 @@ export function openDatabase(databasePath) {
     writableDiscussionParent: database.prepare(`
       SELECT id FROM discussions
       WHERE id = ? AND video_id = ? AND deleted_at IS NULL
+        AND moderation_status = 'visible'
     `),
     videosMissingCover: database.prepare(`${videoSelect} WHERE v.cover_storage_name IS NULL AND v.deleted_at IS NULL AND v.validation_status IN ('ready', 'ready_with_warnings') ORDER BY v.created_at ASC, v.id ASC`),
     listDiscussions: database.prepare(`${discussionSelect} WHERE d.video_id = ? ORDER BY d.created_at ASC, d.id ASC`),
@@ -938,12 +1188,20 @@ export function openDatabase(databasePath) {
       FROM tags AS t
       JOIN video_tags AS vt ON vt.tag_id = t.id
       JOIN videos AS v ON v.id = vt.video_id
-      WHERE v.validation_status IN ('ready', 'ready_with_warnings') AND v.visibility = 'public' AND v.moderation_status = 'visible' AND v.withdrawn_at IS NULL AND v.deleted_at IS NULL
+      WHERE t.is_active = 1 AND t.merged_into_id IS NULL
+        AND v.validation_status IN ('ready', 'ready_with_warnings') AND v.visibility = 'public' AND v.moderation_status = 'visible' AND v.withdrawn_at IS NULL AND v.deleted_at IS NULL
       GROUP BY t.id, t.slug, t.name
       ORDER BY video_count DESC, t.name COLLATE NOCASE ASC
     `),
-    getTagBySlug: database.prepare('SELECT * FROM tags WHERE slug = ? COLLATE NOCASE'),
-    insertTag: database.prepare('INSERT INTO tags (slug, name, created_by, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(slug) DO NOTHING'),
+    getTagBySlug: database.prepare(`
+      SELECT t.*, target.slug AS merged_into_slug, target.name AS merged_into_name
+      FROM tags AS t LEFT JOIN tags AS target ON target.id = t.merged_into_id
+      WHERE t.slug = ? COLLATE NOCASE
+    `),
+    insertTag: database.prepare(`
+      INSERT INTO tags (slug, name, created_by, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?) ON CONFLICT(slug) DO NOTHING
+    `),
     insertVideoTag: database.prepare('INSERT OR IGNORE INTO video_tags (video_id, tag_id, sort_order) VALUES (?, ?, ?)'),
     getVideoVote: database.prepare('SELECT value FROM video_votes WHERE video_id = ? AND user_id = ?'),
     getDiscussionVote: database.prepare('SELECT value FROM discussion_votes WHERE discussion_id = ? AND user_id = ?'),
@@ -973,7 +1231,7 @@ export function openDatabase(databasePath) {
     `),
     updateUserPassword: database.prepare(`
       UPDATE users SET password_hash = ?, updated_at = ?
-      WHERE id = ? AND status = 'active' AND deleted_at IS NULL
+      WHERE id = ? AND status IN ('active', 'suspended') AND deleted_at IS NULL
     `),
     publicUserProfile: database.prepare(`
       SELECT
@@ -985,7 +1243,7 @@ export function openDatabase(databasePath) {
             AND v.withdrawn_at IS NULL AND v.deleted_at IS NULL) AS video_count,
         (SELECT count(*) FROM discussions AS d
           JOIN videos AS v ON v.id = d.video_id
-          WHERE d.user_id = u.id AND d.deleted_at IS NULL
+          WHERE d.user_id = u.id AND d.deleted_at IS NULL AND d.moderation_status = 'visible'
             AND v.validation_status IN ('ready', 'ready_with_warnings')
             AND v.visibility = 'public' AND v.moderation_status = 'visible'
             AND v.withdrawn_at IS NULL AND v.deleted_at IS NULL) AS discussion_count,
@@ -1033,7 +1291,28 @@ export function openDatabase(databasePath) {
       FROM videos AS v
       JOIN users AS owner ON owner.id = v.user_id
       WHERE v.id = ? AND v.user_id = ? AND v.withdrawn_at IS NOT NULL AND v.deleted_at IS NULL
+        AND v.moderation_status = 'visible'
         AND owner.status = 'active' AND owner.deleted_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM moderation_cases AS c
+          WHERE c.video_id = v.id AND c.status != 'resolved'
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM appeals AS p
+          JOIN moderation_actions AS pa ON pa.id = p.moderation_action_id
+          WHERE pa.video_id = v.id AND p.status != 'resolved'
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM moderation_actions AS a
+          WHERE a.video_id = v.id
+            AND a.action IN ('video_hide', 'video_remove')
+            AND a.created_at >= ?
+            AND NOT EXISTS (
+              SELECT 1 FROM appeals AS resolved_appeal
+              WHERE resolved_appeal.moderation_action_id = a.id
+                AND resolved_appeal.status = 'resolved'
+            )
+        )
     `),
     markVideoDeleted: database.prepare(`
       UPDATE videos
@@ -1048,9 +1327,16 @@ export function openDatabase(databasePath) {
           validation_summary = '{}', sha256 = NULL, duration_seconds = NULL,
           width = NULL, height = NULL, frame_rate = NULL,
           source_container = NULL, source_video_codec = NULL, source_audio_codec = NULL,
-          user_id = NULL, category_id = NULL, cover_storage_name = NULL,
+          user_id = CASE
+            WHEN EXISTS (SELECT 1 FROM moderation_cases AS retained_case WHERE retained_case.video_id = videos.id)
+              OR EXISTS (SELECT 1 FROM moderation_actions AS retained_action WHERE retained_action.video_id = videos.id)
+              OR EXISTS (SELECT 1 FROM discussions AS retained_discussion WHERE retained_discussion.video_id = videos.id)
+            THEN user_id ELSE NULL
+          END,
+          category_id = NULL, cover_storage_name = NULL,
           cover_media_type = NULL, cover_source = NULL, visibility = 'private',
-          moderation_status = 'removed', withdrawn_at = COALESCE(withdrawn_at, ?), deleted_at = ?
+          moderation_status = 'removed', moderation_version = moderation_version + 1,
+          withdrawn_at = COALESCE(withdrawn_at, ?), deleted_at = ?
       WHERE id = ? AND deleted_at IS NULL
     `),
     enqueueFileDeletion: database.prepare(`
@@ -1164,7 +1450,10 @@ export function openDatabase(databasePath) {
       VALUES (?, ?, ?, ?, ?)
     `),
     getSession: database.prepare(`${sessionSelect} WHERE s.token_hash = ?`),
-    findSession: database.prepare(`${sessionSelect} WHERE s.token_hash = ? AND s.expires_at > ? AND u.status = 'active' AND u.deleted_at IS NULL`),
+    findSession: database.prepare(`${sessionSelect} WHERE s.token_hash = ? AND s.expires_at > ? AND u.status IN ('active', 'suspended') AND u.deleted_at IS NULL`),
+    sessionEligibleUser: database.prepare(`
+      SELECT id FROM users WHERE id = ? AND status IN ('active', 'suspended') AND deleted_at IS NULL
+    `),
     updateSessionCsrfToken: database.prepare('UPDATE sessions SET csrf_token_hash = ? WHERE token_hash = ?'),
     revokeSession: database.prepare('DELETE FROM sessions WHERE token_hash = ?'),
     revokeOtherSessions: database.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?'),
@@ -1193,7 +1482,12 @@ export function openDatabase(databasePath) {
           (SELECT count(*) FROM discussions AS child WHERE child.parent_id = d.id) AS child_count
         FROM discussions AS d WHERE d.id = ?
       `).get(currentId);
-      if (!row || row.deleted_at === null || row.child_count > 0) break;
+      const hasGovernanceHistory = database.prepare(`
+        SELECT 1
+        WHERE EXISTS (SELECT 1 FROM moderation_cases WHERE discussion_id = ?)
+           OR EXISTS (SELECT 1 FROM moderation_actions WHERE discussion_id = ?)
+      `).get(currentId, currentId);
+      if (!row || row.deleted_at === null || row.child_count > 0 || hasGovernanceHistory) break;
       database.prepare(`
         DELETE FROM notifications WHERE type = 'reply' AND discussion_id = ?
       `).run(currentId);
@@ -1202,28 +1496,60 @@ export function openDatabase(databasePath) {
     }
   }
 
-  function deleteOwnedDiscussionInsideTransaction(id, userId, deletedAt) {
+  function deleteOwnedDiscussionInsideTransaction(id, userId, deletedAt, suppliedGovernanceCutoff) {
     if (!statements.activeUser.get(userId)) return null;
+    const governanceCutoff = governanceRetentionCutoff(deletedAt, suppliedGovernanceCutoff);
     const row = database.prepare(`
-      SELECT id, parent_id, user_id, deleted_at,
+      SELECT id, parent_id, user_id, deleted_at, moderation_status,
         (SELECT count(*) FROM discussions AS child WHERE child.parent_id = discussions.id) AS child_count
       FROM discussions WHERE id = ?
-    `).get(id);
-    if (!row || row.user_id !== userId || row.deleted_at !== null) return null;
+        AND NOT EXISTS (
+          SELECT 1 FROM moderation_cases AS c
+          WHERE c.discussion_id = discussions.id AND c.status != 'resolved'
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM appeals AS p
+          JOIN moderation_actions AS pa ON pa.id = p.moderation_action_id
+          WHERE pa.discussion_id = discussions.id AND p.status != 'resolved'
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM moderation_actions AS a
+          WHERE a.discussion_id = discussions.id
+            AND a.action IN ('discussion_hide', 'discussion_remove')
+            AND a.created_at >= ?
+            AND NOT EXISTS (
+              SELECT 1 FROM appeals AS resolved_appeal
+              WHERE resolved_appeal.moderation_action_id = a.id
+                AND resolved_appeal.status = 'resolved'
+            )
+        )
+    `).get(id, governanceCutoff);
+    if (
+      !row
+      || row.user_id !== userId
+      || row.deleted_at !== null
+      || row.moderation_status !== 'visible'
+    ) return null;
     database.prepare(`
       DELETE FROM notifications WHERE type = 'reply' AND discussion_id = ?
     `).run(id);
-    if (row.child_count === 0) {
+    const hasGovernanceHistory = database.prepare(`
+      SELECT 1
+      WHERE EXISTS (SELECT 1 FROM moderation_cases WHERE discussion_id = ?)
+         OR EXISTS (SELECT 1 FROM moderation_actions WHERE discussion_id = ?)
+    `).get(id, id);
+    if (row.child_count === 0 && !hasGovernanceHistory) {
       database.prepare('DELETE FROM discussions WHERE id = ?').run(id);
       cleanupEmptyDiscussionTombstones(row.parent_id);
       return { id, mode: 'deleted' };
     }
     database.prepare(`
       UPDATE discussions
-      SET nickname = '已删除用户', body_markdown = '', user_id = NULL,
+      SET nickname = '已删除用户', body_markdown = '',
+          user_id = CASE WHEN ? = 1 THEN user_id ELSE NULL END,
           title = NULL, edited_at = NULL, edit_count = 0, deleted_at = ?
       WHERE id = ?
-    `).run(deletedAt, id);
+    `).run(hasGovernanceHistory ? 1 : 0, deletedAt, id);
     database.prepare('DELETE FROM discussion_votes WHERE discussion_id = ?').run(id);
     return { id, mode: 'tombstoned' };
   }
@@ -1366,6 +1692,7 @@ export function openDatabase(databasePath) {
 
   return {
     raw: database,
+    governance: createGovernanceStore(database),
     getSchemaVersion() {
       return database.prepare('PRAGMA user_version').get().user_version;
     },
@@ -1394,7 +1721,9 @@ export function openDatabase(databasePath) {
           OR EXISTS (
             SELECT 1 FROM video_tags AS search_vt
             JOIN tags AS search_t ON search_t.id = search_vt.tag_id
-            WHERE search_vt.video_id = v.id AND search_t.name LIKE ? ESCAPE '\\' COLLATE NOCASE
+            WHERE search_vt.video_id = v.id
+              AND search_t.is_active = 1 AND search_t.merged_into_id IS NULL
+              AND search_t.name LIKE ? ESCAPE '\\' COLLATE NOCASE
           )
         )`);
         values.push(pattern, pattern, pattern, pattern);
@@ -1407,7 +1736,9 @@ export function openDatabase(databasePath) {
         clauses.push(`EXISTS (
           SELECT 1 FROM video_tags AS filter_vt
           JOIN tags AS filter_t ON filter_t.id = filter_vt.tag_id
-          WHERE filter_vt.video_id = v.id AND filter_t.slug = ? COLLATE NOCASE
+          WHERE filter_vt.video_id = v.id
+            AND filter_t.is_active = 1 AND filter_t.merged_into_id IS NULL
+            AND filter_t.slug = ? COLLATE NOCASE
         )`);
         values.push(tagSlug);
       }
@@ -1472,8 +1803,11 @@ export function openDatabase(databasePath) {
           video.createdAt
         );
         for (const [index, tag] of (video.tags ?? []).entries()) {
-          statements.insertTag.run(tag.slug, tag.name, video.userId ?? null, video.createdAt);
+          statements.insertTag.run(tag.slug, tag.name, video.userId ?? null, video.createdAt, video.createdAt);
           const storedTag = statements.getTagBySlug.get(tag.slug);
+          if (!storedTag || storedTag.is_active !== 1 || storedTag.merged_into_id !== null) {
+            throw new Error(`标签 ${tag.slug} 已停用或合并，不能用于新稿件`);
+          }
           statements.insertVideoTag.run(video.id, storedTag.id, index);
         }
         database.exec('COMMIT');
@@ -1685,9 +2019,10 @@ export function openDatabase(databasePath) {
         return changed === 1 ? this.getVideo(id, userId) : null;
       });
     },
-    markVideoPermanentlyDeleted(id, userId, deletedAt) {
+    markVideoPermanentlyDeleted(id, userId, deletedAt, governanceCutoff) {
       return inImmediateTransaction(() => {
-        const row = statements.getOwnedVideoDeletionSource.get(id, userId);
+        const cutoff = governanceRetentionCutoff(deletedAt, governanceCutoff);
+        const row = statements.getOwnedVideoDeletionSource.get(id, userId, cutoff);
         if (!row) return null;
         return markVideoDeletedInsideTransaction(row, deletedAt);
       });
@@ -1747,17 +2082,39 @@ export function openDatabase(databasePath) {
       `).get(userId).count;
       return { items, total, limit, offset };
     },
-    editDiscussion(id, userId, changes) {
+    editDiscussion(id, userId, changes, suppliedGovernanceCutoff) {
       return inImmediateTransaction(() => {
+        const governanceCutoff = governanceRetentionCutoff(changes.editedAt, suppliedGovernanceCutoff);
         const current = database.prepare(`
           SELECT d.title, d.body_markdown
           FROM discussions AS d
           JOIN videos AS v ON v.id = d.video_id
           JOIN users AS author ON author.id = d.user_id
           WHERE d.id = ? AND d.user_id = ? AND d.deleted_at IS NULL
+            AND d.moderation_status = 'visible'
             AND v.deleted_at IS NULL
             AND author.status = 'active' AND author.deleted_at IS NULL
-        `).get(id, userId);
+            AND NOT EXISTS (
+              SELECT 1 FROM moderation_cases AS c
+              WHERE c.discussion_id = d.id AND c.status != 'resolved'
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM appeals AS p
+              JOIN moderation_actions AS pa ON pa.id = p.moderation_action_id
+              WHERE pa.discussion_id = d.id AND p.status != 'resolved'
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM moderation_actions AS a
+              WHERE a.discussion_id = d.id
+                AND a.action IN ('discussion_hide', 'discussion_remove')
+                AND a.created_at >= ?
+                AND NOT EXISTS (
+                  SELECT 1 FROM appeals AS resolved_appeal
+                  WHERE resolved_appeal.moderation_action_id = a.id
+                    AND resolved_appeal.status = 'resolved'
+                )
+            )
+        `).get(id, userId, governanceCutoff);
         if (!current) return null;
         const title = changes.title ?? null;
         const bodyMarkdown = changes.bodyMarkdown;
@@ -1772,8 +2129,13 @@ export function openDatabase(databasePath) {
         return this.getDiscussion(id, userId);
       });
     },
-    deleteDiscussion(id, userId, deletedAt) {
-      return inImmediateTransaction(() => deleteOwnedDiscussionInsideTransaction(id, userId, deletedAt));
+    deleteDiscussion(id, userId, deletedAt, governanceCutoff) {
+      return inImmediateTransaction(() => deleteOwnedDiscussionInsideTransaction(
+        id,
+        userId,
+        deletedAt,
+        governanceCutoff
+      ));
     },
     listCategories() {
       return statements.listCategories.all().map((row) => ({
@@ -1797,7 +2159,16 @@ export function openDatabase(databasePath) {
     },
     getTagBySlug(slug) {
       const row = statements.getTagBySlug.get(slug);
-      return row ? { id: row.id, slug: row.slug, name: row.name } : null;
+      return row ? {
+        id: row.id,
+        slug: row.slug,
+        name: row.name,
+        isActive: row.is_active === 1,
+        mergedIntoId: row.merged_into_id ?? null,
+        mergedIntoSlug: row.merged_into_slug ?? null,
+        mergedIntoName: row.merged_into_name ?? null,
+        updatedAt: row.updated_at ?? row.created_at
+      } : null;
     },
     setVideoVote(videoId, userId, value, changedAt, options = {}) {
       return inImmediateTransaction(() => {
@@ -2005,8 +2376,45 @@ export function openDatabase(databasePath) {
       return inImmediateTransaction(() => {
         const user = statements.getUserById.get(userId);
         if (!user || user.status !== 'active' || user.deleted_at !== null) return null;
+        if (
+          user.role === 'administrator'
+          && database.prepare(`
+            SELECT count(*) AS count FROM users
+            WHERE role = 'administrator' AND status = 'active' AND deleted_at IS NULL
+          `).get().count <= 1
+        ) return null;
         const assets = [];
         if (options.deleteVideos === true) {
+          const cutoff = governanceRetentionCutoff(deletedAt, options.governanceCutoff);
+          const protectedVideo = database.prepare(`
+            SELECT v.id FROM videos AS v
+            WHERE v.user_id = ? AND v.deleted_at IS NULL
+              AND (
+                v.moderation_status != 'visible'
+                OR EXISTS (
+                  SELECT 1 FROM moderation_cases AS c
+                  WHERE c.video_id = v.id AND c.status != 'resolved'
+                )
+                OR EXISTS (
+                  SELECT 1 FROM appeals AS p
+                  JOIN moderation_actions AS pa ON pa.id = p.moderation_action_id
+                  WHERE pa.video_id = v.id AND p.status != 'resolved'
+                )
+                OR EXISTS (
+                  SELECT 1 FROM moderation_actions AS a
+                  WHERE a.video_id = v.id
+                    AND a.action IN ('video_hide', 'video_remove')
+                    AND a.created_at >= ?
+                    AND NOT EXISTS (
+                      SELECT 1 FROM appeals AS resolved_appeal
+                      WHERE resolved_appeal.moderation_action_id = a.id
+                        AND resolved_appeal.status = 'resolved'
+                    )
+                )
+              )
+            LIMIT 1
+          `).get(userId, cutoff);
+          if (protectedVideo) return null;
           const rows = database.prepare(`
             SELECT id, title, storage_name, cover_storage_name, validation_status
             FROM videos WHERE user_id = ? AND deleted_at IS NULL
@@ -2023,7 +2431,9 @@ export function openDatabase(databasePath) {
             WHERE user_id = ? AND deleted_at IS NULL
             ORDER BY id DESC
           `).all(userId);
-          for (const { id } of ids) deleteOwnedDiscussionInsideTransaction(id, userId, deletedAt);
+          for (const { id } of ids) {
+            deleteOwnedDiscussionInsideTransaction(id, userId, deletedAt, options.governanceCutoff);
+          }
         }
         database.prepare("UPDATE discussions SET nickname = '已注销用户' WHERE user_id = ?").run(userId);
         const currentVideoVotes = database.prepare(`
@@ -2046,7 +2456,8 @@ export function openDatabase(databasePath) {
           UPDATE users
           SET display_name = '已注销用户', password_hash = ?, bio = '',
               avatar_storage_name = NULL, avatar_media_type = NULL,
-              status = 'disabled', updated_at = ?, deleted_at = ?
+              status = 'disabled', governance_version = governance_version + 1,
+              updated_at = ?, deleted_at = ?
           WHERE id = ?
         `).run(`disabled:${userId}:${deletedAt}`, deletedAt, deletedAt, userId);
         return {
@@ -2062,7 +2473,7 @@ export function openDatabase(databasePath) {
       const tokenHash = requireSha256Hash(session.tokenHash, '会话令牌');
       const csrfTokenHash = requireSha256Hash(session.csrfTokenHash, 'CSRF 令牌');
       return inImmediateTransaction(() => {
-        if (!statements.activeUser.get(session.userId)) return null;
+        if (!statements.sessionEligibleUser.get(session.userId)) return null;
         statements.createSession.run(
           tokenHash,
           session.userId,

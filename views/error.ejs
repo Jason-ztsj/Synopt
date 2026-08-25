@@ -18,6 +18,7 @@
     <p class="error-page__code">ERROR / <%= resolvedStatus %></p>
     <h1><%= errorTitle %></h1>
     <p><%= errorMessage %></p>
+    <% if (typeof requestId === 'string' && requestId) { %><p>请求编号：<code><%= requestId %></code></p><% } %>
     <div class="error-page__actions">
       <a class="button button--primary" href="/">返回同见首页</a>
       <a class="text-link" href="/upload">发布新视频 <span aria-hidden="true">→</span></a>

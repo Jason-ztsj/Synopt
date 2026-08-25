@@ -1,0 +1,62 @@
+<%
+  const cmsDashboard = typeof dashboard !== 'undefined' && dashboard && typeof dashboard === 'object' ? dashboard : {};
+  const cmsPendingCases = typeof pendingCases !== 'undefined' && Array.isArray(pendingCases) ? pendingCases : (Array.isArray(cmsDashboard.pendingCases) ? cmsDashboard.pendingCases : (Array.isArray(cmsDashboard.cases) ? cmsDashboard.cases : []));
+  const cmsFailedValidations = typeof failedValidations !== 'undefined' && Array.isArray(failedValidations) ? failedValidations : (Array.isArray(cmsDashboard.failedValidations) ? cmsDashboard.failedValidations : []);
+  const cmsFailedDeletions = typeof failedDeletions !== 'undefined' && Array.isArray(failedDeletions) ? failedDeletions : (Array.isArray(cmsDashboard.failedDeletions) ? cmsDashboard.failedDeletions : []);
+  const cmsRecentContent = typeof recentContent !== 'undefined' && Array.isArray(recentContent) ? recentContent : (Array.isArray(cmsDashboard.recentContent) ? cmsDashboard.recentContent : (Array.isArray(cmsDashboard.videos) ? cmsDashboard.videos : []));
+  const cmsRecentActions = typeof recentActions !== 'undefined' && Array.isArray(recentActions) ? recentActions : (Array.isArray(cmsDashboard.recentActions) ? cmsDashboard.recentActions : (Array.isArray(cmsDashboard.actions) ? cmsDashboard.actions : []));
+  const cmsIsAdministrator = typeof currentUser !== 'undefined' && currentUser?.role === 'administrator';
+  const cmsDashboardViewerId = typeof currentUser !== 'undefined' ? currentUser?.id : null;
+  const cmsDashboardIsOwnContent = function(item) {
+    return Boolean(cmsDashboardViewerId)
+      && String(item.userId || item.user_id || item.ownerUserId || item.owner_user_id || '') === String(cmsDashboardViewerId);
+  };
+  const cmsDashboardDate = function(value) {
+    const date = value ? new Date(value) : null;
+    return date && !Number.isNaN(date.getTime()) ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(date) : '—';
+  };
+%>
+<%- include('partials/page-start', { pageTitle: '治理概览｜同见', currentPath: '/cms' }) %>
+  <header class="cms-page-heading">
+    <div><p class="cms-eyebrow">治理概览</p><h1>今天需要处理什么</h1><p>聚合案件、媒体任务与近期治理决定。技术验证和规则审核始终保持为两条独立状态线。</p></div>
+  </header>
+  <%- include('partials/feedback') %>
+
+  <section class="cms-metric-grid" aria-label="待办数量">
+    <a class="cms-metric" href="/cms/cases?status=open"><span>待处理案件</span><strong><%= Number(cmsDashboard.openCaseCount ?? cmsPendingCases.length) || 0 %></strong><small>查看尚未进入复核的案件</small></a>
+    <a class="cms-metric" href="/cms/appeals?status=pending"><span>待复核申诉</span><strong><%= Number(cmsDashboard.pendingAppealCount ?? 0) || 0 %></strong><small>优先交由非原操作者复核</small></a>
+    <a class="cms-metric" href="<%= cmsIsAdministrator ? '/cms/tasks#validation-failures' : '/cms/videos?validation=validation_failed' %>"><span>验证失败</span><strong><%= Number(cmsDashboard.validationFailedCount ?? cmsDashboard.failedValidationCount ?? cmsFailedValidations.length) || 0 %></strong><small><%= cmsIsAdministrator ? '只能安全地重新排队' : '查看失败内容；重试由管理员执行' %></small></a>
+    <% if (cmsIsAdministrator) { %><a class="cms-metric" href="/cms/tasks#deletion-failures"><span>删除队列失败</span><strong><%= Number(cmsDashboard.deletionFailedCount ?? cmsDashboard.failedDeletionCount ?? cmsFailedDeletions.length) || 0 %></strong><small>令 worker 立即重试</small></a><% } else { %><div class="cms-metric"><span>删除队列失败</span><strong><%= Number(cmsDashboard.deletionFailedCount ?? 0) || 0 %></strong><small>错误详情和重试仅管理员可用</small></div><% } %>
+  </section>
+
+  <div class="cms-dashboard-grid">
+    <section class="cms-panel cms-panel--span-2" aria-labelledby="dashboard-cases-title">
+      <header class="cms-panel__heading"><div><p class="cms-eyebrow">优先队列</p><h2 id="dashboard-cases-title">待处理案件</h2></div><a href="/cms/cases">查看全部</a></header>
+      <% if (!cmsPendingCases.length) { %><div class="cms-empty"><p>当前没有待处理案件。</p></div><% } else { %>
+        <div class="cms-table-wrap"><table class="cms-table"><caption class="cms-visually-hidden">待处理案件</caption><thead><tr><th scope="col">案件</th><th scope="col">目标</th><th scope="col">分类</th><th scope="col">创建时间</th><th scope="col"><span class="cms-visually-hidden">操作</span></th></tr></thead><tbody>
+        <% cmsPendingCases.slice(0, 8).forEach(function(item) { %><tr><td data-label="案件"><a href="/cms/cases/<%= item.id %>">#<%= item.id %></a><small class="cms-cell-note"><%= item.status === 'in_review' ? '复核中' : '待处理' %></small></td><td data-label="目标"><%= item.targetTitle || item.videoTitle || item.discussionTitle || item.targetId || '未知目标' %></td><td data-label="分类"><%= item.reportCategoryLabel || item.reportCategory || item.reasonCategory || item.category || '主动调查' %></td><td data-label="创建时间"><time datetime="<%= item.createdAt || item.created_at || '' %>"><%= cmsDashboardDate(item.createdAt || item.created_at) %></time></td><td data-label="操作"><a class="cms-row-link" href="/cms/cases/<%= item.id %>">处理</a></td></tr><% }); %>
+        </tbody></table></div>
+      <% } %>
+    </section>
+
+    <section class="cms-panel" aria-labelledby="dashboard-validation-title">
+      <header class="cms-panel__heading"><div><p class="cms-eyebrow">媒体管线</p><h2 id="dashboard-validation-title">验证失败</h2></div><a href="<%= cmsIsAdministrator ? '/cms/tasks' : '/cms/videos?validation=validation_failed' %>"><%= cmsIsAdministrator ? '任务页' : '视频列表' %></a></header>
+      <% if (!cmsFailedValidations.length) { %><div class="cms-empty"><p>没有验证失败的稿件。</p></div><% } else { %><ul class="cms-compact-list"><% cmsFailedValidations.slice(0, 6).forEach(function(video) { const isOwn = cmsDashboardIsOwnContent(video); %><li><span><% if (isOwn) { %><strong><%= video.title || video.id %></strong><% } else { %><a href="/cms/videos/<%= video.id %>"><%= video.title || video.id %></a><% } %><small><%= isOwn ? '本人内容 · 回避' : (video.validationSummary?.message || video.validationError || '验证服务失败') %></small></span><strong>失败</strong></li><% }); %></ul><% } %>
+    </section>
+
+    <section class="cms-panel" aria-labelledby="dashboard-deletion-title">
+      <header class="cms-panel__heading"><div><p class="cms-eyebrow">文件队列</p><h2 id="dashboard-deletion-title">删除失败</h2></div><% if (cmsIsAdministrator) { %><a href="/cms/tasks#deletion-failures">任务页</a><% } %></header>
+      <% if (!cmsIsAdministrator) { %><div class="cms-empty"><p>当前有 <%= Number(cmsDashboard.deletionFailedCount ?? 0) || 0 %> 个失败任务；目标与错误详情仅管理员可见。</p></div><% } else if (!cmsFailedDeletions.length) { %><div class="cms-empty"><p>没有失败的删除任务。</p></div><% } else { %><ul class="cms-compact-list"><% cmsFailedDeletions.slice(0, 6).forEach(function(task) { %><li><span><strong><%= task.kind || '文件' %> · #<%= task.id %></strong><small><%= task.lastError || task.last_error || task.storageName || task.storage_name %></small></span><b><%= Number(task.attemptCount ?? task.attempt_count ?? 0) %> 次</b></li><% }); %></ul><% } %>
+    </section>
+
+    <section class="cms-panel cms-panel--span-2" aria-labelledby="dashboard-content-title">
+      <header class="cms-panel__heading"><div><p class="cms-eyebrow">内容流</p><h2 id="dashboard-content-title">近期内容</h2></div></header>
+      <% if (!cmsRecentContent.length) { %><div class="cms-empty"><p>暂无近期内容。</p></div><% } else { %><ul class="cms-activity-list"><% cmsRecentContent.slice(0, 8).forEach(function(item) { const kind = item.targetType || item.type || (item.videoId ? 'video' : 'video'); const id = item.id || item.targetId; const isOwn = cmsDashboardIsOwnContent(item); %><li><span class="cms-kind"><%= kind === 'discussion' ? '讨论' : '视频' %></span><div><% if (isOwn) { %><strong><%= item.title || item.targetTitle || item.bodyPreview || id %></strong><% } else { %><a href="/cms/<%= kind === 'discussion' ? 'discussions' : 'videos' %>/<%= id %>"><%= item.title || item.targetTitle || item.bodyPreview || id %></a><% } %><small><%= item.actorDisplayName || item.accountDisplayName || item.owner_display_name || item.username || '未知账号' %> · <%= cmsDashboardDate(item.createdAt || item.created_at) %><%= isOwn ? ' · 本人内容回避' : '' %></small></div></li><% }); %></ul><% } %>
+    </section>
+
+    <section class="cms-panel cms-panel--span-2" aria-labelledby="dashboard-actions-title">
+      <header class="cms-panel__heading"><div><p class="cms-eyebrow">治理记录</p><h2 id="dashboard-actions-title">近期操作</h2></div><% if (typeof currentUser !== 'undefined' && currentUser?.role === 'administrator') { %><a href="/cms/audit">审计日志</a><% } %></header>
+      <% if (!cmsRecentActions.length) { %><div class="cms-empty"><p>暂无近期治理操作。</p></div><% } else { %><ul class="cms-activity-list"><% cmsRecentActions.slice(0, 8).forEach(function(action) { const actionKind = action.videoId ? '视频' : (action.discussionId ? '讨论' : (action.userId ? '账号' : '操作')); %><li><span class="cms-kind"><%= action.targetType || action.objectType || actionKind %></span><div><strong><%= action.actionLabel || action.actionType || action.action || '治理操作' %></strong><small><%= action.actorDisplayName || action.actorName || action.actorUsername || '系统' %> · <%= cmsDashboardDate(action.createdAt || action.created_at) %></small></div></li><% }); %></ul><% } %>
+    </section>
+  </div>
+<%- include('partials/page-end') %>

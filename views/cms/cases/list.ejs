@@ -1,0 +1,39 @@
+<%
+  const cmsCases = typeof cases !== 'undefined' && Array.isArray(cases) ? cases : [];
+  const cmsCaseFilters = typeof filters !== 'undefined' && filters && typeof filters === 'object' ? filters : {};
+  const cmsCaseStatus = function(value) { return ({ open: '待处理', in_review: '复核中', resolved: '已结案' })[value] || value || '未知'; };
+  const cmsCaseOutcome = function(value) { return ({ violation_confirmed: '确认违规', no_violation: '未发现违规' })[value] || value || '';} ;
+  const cmsCaseReason = function(item) { const value = item.reportCategory || item.report_category || item.reasonCategory; return item.reportCategoryLabel || item.report_category_label || (typeof reportReasons !== 'undefined' && reportReasons ? reportReasons[value] : '') || value || '主动调查'; };
+  const cmsCaseDate = function(value) { const date = value ? new Date(value) : null; return date && !Number.isNaN(date.getTime()) ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(date) : '—'; };
+%>
+<%- include('../partials/page-start', { pageTitle: '案件｜同见管理后台', currentPath: '/cms/cases' }) %>
+  <header class="cms-page-heading"><div><p class="cms-eyebrow">举报与主动调查</p><h1>案件</h1><p>每个案件只关联一个视频或一条讨论。举报人只能看到处理结果和公开说明。</p></div></header>
+  <%- include('../partials/feedback') %>
+
+  <form class="cms-filter-bar" action="/cms/cases" method="get" aria-label="筛选案件">
+    <label><span>状态</span><select name="status"><option value="">全部状态</option><option value="open"<% if (cmsCaseFilters.status === 'open') { %> selected<% } %>>待处理</option><option value="in_review"<% if (cmsCaseFilters.status === 'in_review') { %> selected<% } %>>复核中</option><option value="resolved"<% if (cmsCaseFilters.status === 'resolved') { %> selected<% } %>>已结案</option></select></label>
+    <label><span>目标</span><select name="target"><option value="">全部目标</option><option value="video"<% if (cmsCaseFilters.target === 'video') { %> selected<% } %>>视频</option><option value="discussion"<% if (cmsCaseFilters.target === 'discussion') { %> selected<% } %>>讨论</option></select></label>
+    <label class="cms-check-filter"><span>分配</span><span><input type="checkbox" name="mine" value="1"<% if (cmsCaseFilters.mine) { %> checked<% } %>> 只看由我处理</span></label>
+    <button class="cms-button cms-button--primary" type="submit">筛选</button><a class="cms-button cms-button--quiet" href="/cms/cases">清除</a>
+  </form>
+
+  <section class="cms-panel" aria-labelledby="case-list-title">
+    <header class="cms-panel__heading"><div><h2 id="case-list-title">案件列表</h2><p><%= typeof pagination !== 'undefined' && pagination?.total !== undefined ? Number(pagination.total) : cmsCases.length %> 个结果</p></div></header>
+    <% if (!cmsCases.length) { %><div class="cms-empty"><h3>没有符合条件的案件</h3><p>调整筛选条件，或返回待处理队列。</p></div><% } else { %>
+      <div class="cms-table-wrap"><table class="cms-table"><caption class="cms-visually-hidden">案件列表</caption><thead><tr><th scope="col">案件</th><th scope="col">状态</th><th scope="col">目标</th><th scope="col">举报分类</th><th scope="col">负责人</th><th scope="col">更新时间</th><th scope="col"><span class="cms-visually-hidden">操作</span></th></tr></thead><tbody>
+      <% cmsCases.forEach(function(item) { const targetType = item.targetType || item.target_type || (item.videoId || item.video_id ? 'video' : 'discussion'); %>
+        <tr>
+          <td data-label="案件"><a href="/cms/cases/<%= item.id %>">#<%= item.id %></a><small class="cms-cell-note"><%= ['staff','proactive','investigation'].includes(item.source) ? '主动调查' : '成员举报' %></small></td>
+          <td data-label="状态"><span class="cms-status cms-status--<%= item.status || 'unknown' %>"><%= cmsCaseStatus(item.status) %></span><% if (item.resolution || item.outcome) { %><small class="cms-cell-note"><%= cmsCaseOutcome(item.resolution || item.outcome) %></small><% } %></td>
+          <td data-label="目标"><span class="cms-kind"><%= targetType === 'video' ? '视频' : '讨论' %></span><a href="/cms/<%= targetType === 'video' ? 'videos' : 'discussions' %>/<%= item.targetId || item.target_id || item.videoId || item.video_id || item.discussionId || item.discussion_id %>"><%= item.targetTitle || item.videoTitle || item.discussionTitle || item.targetId || item.target_id || '查看目标' %></a></td>
+          <td data-label="举报分类"><%= cmsCaseReason(item) %></td>
+          <td data-label="负责人"><%= item.assigneeDisplayName || item.assignee_display_name || item.assigneeUsername || item.assignee_username || item.assigneeName || '未认领' %></td>
+          <td data-label="更新时间"><time datetime="<%= item.updatedAt || item.updated_at || item.createdAt || item.created_at || '' %>"><%= cmsCaseDate(item.updatedAt || item.updated_at || item.createdAt || item.created_at) %></time></td>
+          <td data-label="操作"><a class="cms-row-link" href="/cms/cases/<%= item.id %>">查看</a></td>
+        </tr>
+      <% }); %>
+      </tbody></table></div>
+    <% } %>
+  </section>
+  <%- include('../partials/pagination', { basePath: '/cms/cases', queryString: typeof paginationQuery === 'string' ? paginationQuery : '' }) %>
+<%- include('../partials/page-end') %>

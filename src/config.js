@@ -9,6 +9,10 @@ const DEFAULTS = Object.freeze({
   SESSION_TTL_HOURS: '168',
   SESSION_COOKIE_SECURE: 'false',
   AUTH_COOLDOWN_SECONDS: '2',
+  CMS_REAUTH_MINUTES: '30',
+  CMS_PRIVATE_MEDIA_GRANT_MINUTES: '15',
+  REPORT_COOLDOWN_SECONDS: '30',
+  APPEAL_WINDOW_DAYS: '30',
   CLIENT_IP_MODE: 'direct',
   MAX_VIDEO_DURATION_SECONDS: '7200',
   MAX_VIDEO_WIDTH: '4096',
@@ -71,6 +75,14 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
   const sessionTtlHours = positiveInteger(read('SESSION_TTL_HOURS'), 'SESSION_TTL_HOURS', 8760);
   const sessionCookieSecure = booleanValue(read('SESSION_COOKIE_SECURE'), 'SESSION_COOKIE_SECURE');
   const authCooldownSeconds = positiveInteger(read('AUTH_COOLDOWN_SECONDS'), 'AUTH_COOLDOWN_SECONDS', 3600);
+  const cmsReauthMinutes = positiveInteger(read('CMS_REAUTH_MINUTES'), 'CMS_REAUTH_MINUTES', 24 * 60);
+  const cmsPrivateMediaGrantMinutes = positiveInteger(
+    read('CMS_PRIVATE_MEDIA_GRANT_MINUTES'),
+    'CMS_PRIVATE_MEDIA_GRANT_MINUTES',
+    24 * 60
+  );
+  const reportCooldownSeconds = positiveInteger(read('REPORT_COOLDOWN_SECONDS'), 'REPORT_COOLDOWN_SECONDS', 24 * 60 * 60);
+  const appealWindowDays = positiveInteger(read('APPEAL_WINDOW_DAYS'), 'APPEAL_WINDOW_DAYS', 3650);
   const clientIpMode = requiredText(read('CLIENT_IP_MODE'), 'CLIENT_IP_MODE');
   const maxVideoDurationSeconds = positiveInteger(read('MAX_VIDEO_DURATION_SECONDS'), 'MAX_VIDEO_DURATION_SECONDS', 24 * 60 * 60);
   const maxVideoWidth = positiveInteger(read('MAX_VIDEO_WIDTH'), 'MAX_VIDEO_WIDTH', 16384);
@@ -118,6 +130,13 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
     sessionTtlMs: sessionTtlHours * 60 * 60 * 1000,
     sessionCookieSecure,
     authCooldownSeconds,
+    cmsReauthMinutes,
+    cmsReauthMs: cmsReauthMinutes * 60 * 1000,
+    cmsPrivateMediaGrantMinutes,
+    cmsPrivateMediaGrantMs: cmsPrivateMediaGrantMinutes * 60 * 1000,
+    reportCooldownSeconds,
+    appealWindowDays,
+    appealWindowMs: appealWindowDays * 24 * 60 * 60 * 1000,
     clientIpMode,
     maxVideoDurationSeconds,
     maxVideoWidth,

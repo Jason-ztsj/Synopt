@@ -16,6 +16,8 @@
       ? unreadNotificationCount
       : (headerUser ? (headerUser.unreadNotificationCount || headerUser.unread_notification_count || 0) : 0));
   const headerUnreadCount = Math.max(0, Number(rawUnreadCount) || 0);
+  const headerActive = !headerUser || headerUser.status === 'active';
+  const headerCms = Boolean(headerUser) && headerUser.status === 'active' && ['moderator', 'administrator'].includes(headerUser.role);
   const accountMenuId = 'account-menu-panel';
 %>
 <header class="site-header">
@@ -34,11 +36,11 @@
     </form>
     <div class="site-header__actions">
       <nav class="main-nav" aria-label="主导航">
-        <a class="main-nav__upload" href="/upload"<% if (activePath === '/upload') { %> aria-current="page"<% } %>>
+        <% if (headerActive) { %><a class="main-nav__upload" href="/upload"<% if (activePath === '/upload') { %> aria-current="page"<% } %>>
           <span aria-hidden="true">＋</span> 发布视频
-        </a>
+        </a><% } %>
       </nav>
-      <nav class="account-nav" aria-label="账号导航"<% if (headerUser) { %> data-notification-poller data-notification-endpoint="/account/notifications/poll"<% } %>>
+      <nav class="account-nav" aria-label="账号导航"<% if (headerUser && headerUser.status === 'active') { %> data-notification-poller data-notification-endpoint="/account/notifications/poll"<% } %>>
         <% if (headerUser) { %>
           <div class="account-menu" data-account-menu>
             <button class="account-chip" type="button" title="已登录<% if (headerUsername) { %>：@<%= headerUsername %><% } %>" aria-haspopup="menu" aria-expanded="false" aria-controls="<%= accountMenuId %>" data-account-menu-toggle>
@@ -56,11 +58,18 @@
                 <span><strong><%= headerDisplayName %></strong><small><%= headerUsername ? '@' + headerUsername : '已登录用户' %></small></span>
               </header>
               <div class="account-menu__links">
+                <% if (headerUser.status === 'active') { %>
                 <a href="/account/profile" role="menuitem"<% if (activePath.startsWith('/account/profile')) { %> aria-current="page"<% } %>><span aria-hidden="true">○</span><strong>个人信息</strong></a>
                 <a href="/account/videos" role="menuitem"<% if (activePath.startsWith('/account/videos')) { %> aria-current="page"<% } %>><span aria-hidden="true">▷</span><strong>我的稿件</strong></a>
+                <% } %>
                 <a href="/account/settings" role="menuitem"<% if (activePath.startsWith('/account/settings')) { %> aria-current="page"<% } %>><span aria-hidden="true">⌘</span><strong>设置</strong></a>
+                <% if (headerUser.status === 'active') { %>
                 <a href="/account/discussions" role="menuitem"<% if (activePath.startsWith('/account/discussions')) { %> aria-current="page"<% } %>><span aria-hidden="true">≡</span><strong>我的讨论</strong></a>
                 <a href="/account/notifications" role="menuitem"<% if (activePath.startsWith('/account/notifications')) { %> aria-current="page"<% } %>><span aria-hidden="true">◇</span><strong>通知</strong><small class="account-menu__badge" data-notification-count<% if (!headerUnreadCount) { %> hidden<% } %>><%= headerUnreadCount > 99 ? '99+' : headerUnreadCount %></small></a>
+                <% } %>
+                <a href="/account/reports" role="menuitem"<% if (activePath.startsWith('/account/reports')) { %> aria-current="page"<% } %>><span aria-hidden="true">!</span><strong>我的举报</strong></a>
+                <a href="/account/appeals" role="menuitem"<% if (activePath.startsWith('/account/appeals')) { %> aria-current="page"<% } %>><span aria-hidden="true">↺</span><strong>申诉</strong></a>
+                <% if (headerCms) { %><a href="/cms" role="menuitem"><span aria-hidden="true">▦</span><strong>管理后台</strong></a><% } %>
               </div>
               <form class="account-menu__logout" action="/logout" method="post">
                 <input type="hidden" name="_csrf" value="<%= headerCsrfToken %>">

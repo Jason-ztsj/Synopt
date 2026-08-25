@@ -21,9 +21,12 @@ import {
 import { loadConfig } from './config.js';
 import { AVATAR_RULES, validateAvatarImage } from './avatar-image.js';
 import { CapacityGate } from './capacity-gate.js';
+import { createCmsRouter } from './cms.js';
 import { validateCoverImage } from './cover-image.js';
 import { openDatabase } from './database.js';
 import { AppError, ValidationError } from './errors.js';
+import { createGovernanceService, REPORT_REASONS } from './governance.js';
+import { createGovernanceRouter } from './governance-routes.js';
 import { getClientIp } from './ip.js';
 import { getLicense, normalizeLicense } from './license.js';
 import { renderMarkdown } from './markdown.js';
@@ -216,6 +219,26 @@ function publicValidationStatus(status) {
 }
 
 function discussionView(discussion) {
+  if (discussion.moderationStatus === 'hidden' || discussion.moderationStatus === 'removed') {
+    const hidden = discussion.moderationStatus === 'hidden';
+    const placeholder = hidden ? '这条讨论正在审核。' : '这条讨论已依据平台规则移除。';
+    return {
+      ...discussion,
+      nickname: '内容作者',
+      userId: null,
+      accountUsername: null,
+      accountDisplayName: null,
+      accountAvatarStorageName: null,
+      accountAvatarMediaType: null,
+      title: hidden ? '讨论正在审核' : '讨论已由平台移除',
+      bodyMarkdown: placeholder,
+      upvoteCount: 0,
+      downvoteCount: 0,
+      viewerVote: 0,
+      moderationPlaceholder: true,
+      renderedBody: `<p>${placeholder}</p>`
+    };
+  }
   return {
     ...discussion,
     renderedBody: renderMarkdown(discussion.bodyMarkdown)
@@ -338,6 +361,18 @@ export function createApp(options = {}) {
     cooldownSeconds: config.authCooldownSeconds,
     now
   });
+  const reportLimiter = options.reportLimiter ?? new DiscussionRateLimiter({
+    cooldownSeconds: config.reportCooldownSeconds,
+    now
+  });
+  const cmsReauthLimiter = options.cmsReauthLimiter ?? new DiscussionRateLimiter({
+    cooldownSeconds: config.authCooldownSeconds,
+    now
+  });
+  const governanceService = options.governanceService ?? createGovernanceService(database.governance, {
+    appealWindowMs: config.appealWindowMs,
+    mediaGrantMs: config.cmsPrivateMediaGrantMs
+  });
   const imageNormalizationLimiter = options.imageNormalizationLimiter ?? new DiscussionRateLimiter({
     cooldownSeconds: config.imageNormalizationCooldownSeconds,
     now
@@ -352,6 +387,13 @@ export function createApp(options = {}) {
   app.disable('x-powered-by');
   app.set('view engine', 'ejs');
   app.set('views', path.join(projectRoot, 'views'));
+
+  app.use((request, response, next) => {
+    request.requestId = crypto.randomUUID();
+    response.set('X-Request-Id', request.requestId);
+    response.locals.requestId = request.requestId;
+    next();
+  });
 
   app.use((request, response, next) => {
     const securityHeaders = {
@@ -460,6 +502,7 @@ export function createApp(options = {}) {
       response.locals.notificationUnreadCount = request.currentUser
         ? (database.getUnreadNotificationCount?.(request.currentUser.id) ?? 0)
         : 0;
+      response.locals.reportReasons = REPORT_REASONS;
       // Dynamic pages contain user-specific navigation and CSRF form tokens.
       // Media responses explicitly replace this with their public cache policy.
       response.set('Cache-Control', 'no-store');
@@ -489,6 +532,36 @@ export function createApp(options = {}) {
     const nextPath = safeNextPath(request.originalUrl);
     response.redirect(303, `/login?next=${encodeURIComponent(nextPath)}`);
   };
+
+  // Suspended accounts keep a narrow safety-and-appeal session. Enforce the
+  // allowlist centrally so adding a new authenticated route cannot silently
+  // grant them a new mutation capability.
+  app.use((request, _response, next) => {
+    if (request.currentUser?.status !== 'suspended') {
+      next();
+      return;
+    }
+    const allowedAccountGet = [
+      '/account/settings',
+      '/account/reports',
+      '/account/appeals'
+    ].includes(request.path);
+    const allowedMutation = request.method === 'POST' && [
+      '/logout',
+      '/account/settings/password',
+      '/account/appeals'
+    ].includes(request.path);
+    if (allowedMutation || (['GET', 'HEAD'].includes(request.method) && (
+      !request.path.startsWith('/account')
+      && !request.path.startsWith('/cms')
+      && request.path !== '/upload'
+      && !request.path.startsWith('/api/')
+    )) || (['GET', 'HEAD'].includes(request.method) && allowedAccountGet)) {
+      next();
+      return;
+    }
+    next(new AppError('账号已暂停；当前只可浏览公开内容、查看决定、申诉、修改密码或退出', 403, 'ACCOUNT_SUSPENDED'));
+  });
 
   const normalizeUploadedImage = async (request, response, action) => {
     const clientIp = getClientIp(request, config.clientIpMode);
@@ -698,6 +771,27 @@ export function createApp(options = {}) {
     return { categories, categoryTree: categoryTree(categories), popularTags: database.listTags().slice(0, 16) };
   };
 
+  app.use(createGovernanceRouter({
+    database,
+    service: governanceService,
+    config,
+    now,
+    assertCsrf,
+    requireAuthentication,
+    reportLimiter,
+    getClientKey: (request) => getClientIp(request, config.clientIpMode),
+    catalogLocals
+  }));
+  app.use('/cms', createCmsRouter({
+    database,
+    service: governanceService,
+    config,
+    assertCsrf,
+    now,
+    reauthLimiter: cmsReauthLimiter,
+    getClientKey: (request) => getClientIp(request, config.clientIpMode)
+  }));
+
   const renderVideoListing = (request, response, next, overrides = {}) => {
     try {
       const query = String(overrides.query ?? request.query.q ?? '').trim().slice(0, 120);
@@ -731,6 +825,14 @@ export function createApp(options = {}) {
   app.get('/tags/:slug', (request, response, next) => {
     const tag = database.getTagBySlug(request.params.slug);
     if (!tag) {
+      next(new AppError('找不到这个标签', 404, 'TAG_NOT_FOUND'));
+      return;
+    }
+    if (tag.mergedIntoSlug) {
+      response.redirect(301, `/tags/${encodeURIComponent(tag.mergedIntoSlug)}`);
+      return;
+    }
+    if (!tag.isActive) {
       next(new AppError('找不到这个标签', 404, 'TAG_NOT_FOUND'));
       return;
     }
@@ -1008,7 +1110,14 @@ export function createApp(options = {}) {
       if (String(request.body?.confirmTitle ?? '') !== video.title) {
         throw new ValidationError('请输入完整且完全一致的稿件标题以确认删除', 'VIDEO_TITLE_CONFIRMATION_MISMATCH');
       }
-      const asset = database.markVideoPermanentlyDeleted(video.id, request.currentUser.id, nowIso());
+      const deletionTime = nowIso();
+      const governanceCutoff = new Date(now() - config.appealWindowMs).toISOString();
+      const asset = database.markVideoPermanentlyDeleted(
+        video.id,
+        request.currentUser.id,
+        deletionTime,
+        governanceCutoff
+      );
       if (!asset) throw new AppError('稿件当前不能永久删除', 409, 'VIDEO_NOT_DELETABLE');
       await removeVideoAssets(config, [asset]);
       response.redirect(303, '/account/videos?saved=deleted');
@@ -1047,7 +1156,7 @@ export function createApp(options = {}) {
         title,
         bodyMarkdown,
         editedAt: nowIso()
-      });
+      }, new Date(now() - config.appealWindowMs).toISOString());
       if (!updated) throw new AppError('讨论当前不能修改', 409, 'DISCUSSION_NOT_EDITABLE');
       const fallback = `/videos/${current.videoId}#discussion-${current.id}`;
       response.redirect(303, safeNextPath(request.body?.returnTo, fallback));
@@ -1068,7 +1177,14 @@ export function createApp(options = {}) {
       if (!current || current.userId !== request.currentUser.id || current.deletedAt) {
         throw new AppError('找不到这条讨论', 404, 'DISCUSSION_NOT_FOUND');
       }
-      const result = database.deleteDiscussion(id, request.currentUser.id, nowIso());
+      const deletionTime = nowIso();
+      const governanceCutoff = new Date(now() - config.appealWindowMs).toISOString();
+      const result = database.deleteDiscussion(
+        id,
+        request.currentUser.id,
+        deletionTime,
+        governanceCutoff
+      );
       if (!result) throw new AppError('讨论当前不能删除', 409, 'DISCUSSION_NOT_DELETABLE');
       const fallback = `/videos/${current.videoId}#discussions`;
       response.redirect(303, safeNextPath(request.body?.returnTo, fallback));
@@ -1217,7 +1333,8 @@ export function createApp(options = {}) {
       const result = database.deleteAccount(account.id, {
         deleteVideos: checked(request.body?.deleteVideos),
         deleteDiscussions: checked(request.body?.deleteDiscussions),
-        deletedAt: nowIso()
+        deletedAt: nowIso(),
+        governanceCutoff: new Date(now() - config.appealWindowMs).toISOString()
       });
       if (!result) throw new AppError('账号当前不能删除', 409, 'ACCOUNT_NOT_DELETABLE');
       await removeVideoAssets(config, result.assets);
@@ -1276,6 +1393,12 @@ export function createApp(options = {}) {
         const selectedCategory = database.getCategoryBySlug(categorySlug);
         if (!selectedCategory) throw new ValidationError('请选择有效的视频分类', 'INVALID_CATEGORY');
         const tags = validateTags(request.body?.tags);
+        for (const tag of tags) {
+          const existingTag = database.getTagBySlug(tag.slug);
+          if (existingTag && (!existingTag.isActive || existingTag.mergedIntoId !== null)) {
+            throw new ValidationError(`标签“${tag.name}”已停用或合并，请改用当前有效标签`, 'TAG_NOT_ACTIVE');
+          }
+        }
         if (!videoFile) throw new ValidationError('请选择一个视频文件', 'VIDEO_REQUIRED');
         const canonical = validateCanonicalUploadMetadata(videoFile.originalname, videoFile.mimetype);
         await validateCanonicalUploadHeader(temporaryPath, canonical.container);
@@ -1398,7 +1521,7 @@ export function createApp(options = {}) {
         return;
       }
       const isReady = ['ready', 'ready_with_warnings'].includes(video.validationStatus);
-      const isOwner = request.currentUser?.id === video.userId;
+      const isOwner = request.currentUser?.status === 'active' && request.currentUser.id === video.userId;
       if ((!isReady || video.visibility !== 'public' || video.moderationStatus !== 'visible' || video.withdrawnAt) && !isOwner) {
         throw new AppError('找不到这段视频', 404, 'VIDEO_NOT_FOUND');
       }
@@ -1426,7 +1549,7 @@ export function createApp(options = {}) {
     try {
       const video = database.getVideo(request.params.id, request.currentUser?.id);
       if (!video) throw new AppError('找不到这段视频', 404, 'VIDEO_NOT_FOUND');
-      const isOwner = request.currentUser?.id === video.userId;
+      const isOwner = request.currentUser?.status === 'active' && request.currentUser.id === video.userId;
       if (
         video.deletedAt
         || ((video.visibility !== 'public' || video.moderationStatus !== 'visible' || video.withdrawnAt) && !isOwner)
@@ -1488,7 +1611,7 @@ export function createApp(options = {}) {
       if (!video || !video.coverStorageName || !['ready', 'ready_with_warnings'].includes(video.validationStatus)) {
         throw new AppError('视频封面尚不可用', 404, 'COVER_NOT_FOUND');
       }
-      const isOwner = request.currentUser?.id === video.userId;
+      const isOwner = request.currentUser?.status === 'active' && request.currentUser.id === video.userId;
       if (
         video.deletedAt
         || ((video.visibility !== 'public' || video.moderationStatus !== 'visible' || video.withdrawnAt) && !isOwner)
@@ -1667,7 +1790,9 @@ export function createApp(options = {}) {
       const id = Number(request.params.id);
       if (!Number.isSafeInteger(id) || id < 1) throw new AppError('找不到这条讨论', 404, 'DISCUSSION_NOT_FOUND');
       const discussion = database.getDiscussion(id);
-      if (!discussion || discussion.deletedAt) throw new AppError('找不到这条讨论', 404, 'DISCUSSION_NOT_FOUND');
+      if (!discussion || discussion.deletedAt || discussion.moderationStatus !== 'visible') {
+        throw new AppError('找不到这条讨论', 404, 'DISCUSSION_NOT_FOUND');
+      }
       const video = database.getVideo(discussion.videoId);
       if (
         !video
@@ -1705,19 +1830,23 @@ export function createApp(options = {}) {
       : (status < 500 ? error.message : '服务暂时无法完成这个请求，请稍后再试。');
     if (status >= 500) console.error(error);
     if (wantsJson(request) || request.path.startsWith('/api/')) {
-      response.status(status).json({ error: publicMessage });
+      response.status(status).json({ error: publicMessage, code: error?.code ?? 'INTERNAL_ERROR', requestId: request.requestId });
       return;
     }
     response.status(status).render('error', {
       status,
       title: status === 404 ? '这里没有这段影像' : (status === 413 ? '上传内容太大' : '放映暂时中断'),
-      message: publicMessage
+      message: publicMessage,
+      requestId: request.requestId
     });
   });
 
   app.locals.database = database;
   app.locals.config = config;
   app.locals.rateLimiter = rateLimiter;
+  app.locals.reportLimiter = reportLimiter;
+  app.locals.cmsReauthLimiter = cmsReauthLimiter;
+  app.locals.governanceService = governanceService;
   app.close = () => {
     if (ownsDatabase) database.close();
   };
@@ -1729,8 +1858,14 @@ export async function startServer(options = {}) {
   const port = options.port ?? app.locals.config.port;
   const host = options.host ?? '0.0.0.0';
   const server = await new Promise((resolve, reject) => {
-    const listeningServer = app.listen(port, host, () => resolve(listeningServer));
-    listeningServer.once('error', reject);
+    let listeningServer;
+    listeningServer = app.listen(port, host, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(listeningServer);
+    });
   });
   return {
     app,

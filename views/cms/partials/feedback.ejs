@@ -1,0 +1,14 @@
+<%
+  const cmsFeedbackError = typeof error === 'string'
+    ? error
+    : (typeof error !== 'undefined' && error && typeof error.message === 'string' ? error.message : '');
+  const cmsFeedbackFlash = typeof flash === 'string'
+    ? flash
+    : (typeof flash !== 'undefined' && flash && typeof flash.message === 'string' ? flash.message : '');
+%>
+<% if (cmsFeedbackError) { %>
+  <div class="cms-alert cms-alert--error" role="alert"><strong>操作未完成</strong><p><%= cmsFeedbackError %></p></div>
+<% } %>
+<% if (cmsFeedbackFlash) { %>
+  <div class="cms-alert cms-alert--success" role="status"><strong>操作已完成</strong><p><%= cmsFeedbackFlash %></p></div>
+<% } %>

@@ -1,0 +1,14 @@
+<%
+  const cmsPager = typeof pagination !== 'undefined' && pagination && typeof pagination === 'object' ? pagination : {};
+  const cmsPagerPage = Math.max(1, Number(cmsPager.page || 1) || 1);
+  const cmsPagerPages = Math.max(1, Number(cmsPager.totalPages || cmsPager.pages || 1) || 1);
+  const cmsPagerPath = typeof basePath === 'string' ? basePath : '';
+  const cmsPagerQuery = typeof queryString === 'string' && queryString ? '&' + queryString.replace(/^&/, '') : '';
+%>
+<% if (cmsPagerPages > 1) { %>
+  <nav class="cms-pagination" aria-label="分页">
+    <% if (cmsPagerPage > 1) { %><a href="<%= cmsPagerPath %>?page=<%= cmsPagerPage - 1 %><%= cmsPagerQuery %>">上一页</a><% } else { %><span aria-hidden="true"></span><% } %>
+    <strong>第 <%= cmsPagerPage %> / <%= cmsPagerPages %> 页</strong>
+    <% if (cmsPagerPage < cmsPagerPages) { %><a href="<%= cmsPagerPath %>?page=<%= cmsPagerPage + 1 %><%= cmsPagerQuery %>">下一页</a><% } else { %><span aria-hidden="true"></span><% } %>
+  </nav>
+<% } %>

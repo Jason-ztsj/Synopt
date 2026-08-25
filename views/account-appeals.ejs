@@ -1,0 +1,46 @@
+<%
+  const accountDecisions = typeof decisions !== 'undefined' && Array.isArray(decisions) ? decisions : [];
+  const decisionLabel = function(action) { return ({
+    video_hide: '视频已隐藏', video_remove: '视频已移除', video_restore: '视频已恢复',
+    discussion_hide: '讨论已隐藏', discussion_remove: '讨论已移除', discussion_restore: '讨论已恢复',
+    user_suspend: '账号已暂停', user_restore: '账号已恢复', user_role: '账号角色已变更',
+    user_sessions_revoke: '登录会话已撤销', appeal_overturn: '原治理决定已撤销'
+  })[action] || action || '治理决定'; };
+  const decisionAppealLabel = function(decision) {
+    if (!decision.appealId) return '没有关联申诉';
+    if (decision.appealStatus !== 'resolved') return decision.appealStatus === 'in_review' ? '申诉复核中' : '申诉待复核';
+    return decision.appealResult === 'overturned' ? '申诉成立，原决定已撤销' : '申诉完成，原决定维持';
+  };
+%>
+<%- include('partials/head', { pageTitle: '申诉｜同见', pageDescription: '查看并申诉涉及你的平台治理决定。' }) %>
+<body class="page page--account">
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  <%- include('partials/header', { currentPath: currentPath }) %>
+  <div class="account-shell shell">
+    <aside class="account-sidebar"><%- include('partials/account-navigation', { currentPath: currentPath }) %></aside>
+    <main id="main-content" class="account-main" tabindex="-1">
+      <header class="account-page-heading"><p class="eyebrow"><span></span> 复核机制</p><h1>申诉</h1><p>审核动作发生后 <%= appealWindowDays %> 天内可以申诉；每项决定只能提交一次。</p></header>
+      <% if (createdId) { %><div class="alert alert--success" role="status"><p>申诉 #<%= createdId %> 已提交。</p></div><% } %>
+      <section class="account-panel" aria-labelledby="decision-history-title"><h2 id="decision-history-title">涉及我的治理决定</h2>
+        <% if (!accountDecisions.length) { %><p class="account-empty">目前没有涉及你的治理决定。</p><% } %>
+        <div class="account-card-list"><% accountDecisions.forEach(function(decision) { %><article class="account-card"><div><strong>决定 #<%= decision.id %> · <%= decisionLabel(decision.action) %></strong><small><time datetime="<%= decision.createdAt %>"><%= new Date(decision.createdAt).toLocaleDateString('zh-CN') %></time><% if (decision.targetTitle) { %> · <%= decision.targetTitle %><% } %></small></div><p><strong>公开说明：</strong><%= decision.publicReason %></p><p><%= decisionAppealLabel(decision) %></p><% if (decision.appealPublicExplanation) { %><p><strong>申诉复核说明：</strong><%= decision.appealPublicExplanation %></p><% } %></article><% }); %></div>
+      </section>
+      <% if (appealableActions.length) { %>
+        <section class="account-panel" aria-labelledby="appealable-title"><h2 id="appealable-title">可申诉的决定</h2>
+          <% appealableActions.forEach(function(action) { %>
+            <article class="account-card"><div><strong>决定 #<%= action.id %> · <%= action.action %></strong><p><%= action.publicReason %></p></div>
+              <form action="/account/appeals" method="post"><input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="moderationActionId" value="<%= action.id %>"><label>申诉理由（20–2000 字）<textarea name="reason" minlength="20" maxlength="2000" required></textarea></label><button class="button button--primary" type="submit">提交申诉</button></form>
+            </article>
+          <% }); %>
+        </section>
+      <% } %>
+      <section class="account-panel" aria-labelledby="appeal-history-title"><h2 id="appeal-history-title">申诉记录</h2>
+        <% if (!appeals.length) { %><p class="account-empty">目前没有申诉记录。</p><% } %>
+        <div class="account-card-list"><% appeals.forEach(function(appeal) { %><article class="account-card"><div><strong>#<%= appeal.id %> · 决定 #<%= appeal.moderationActionId %></strong><small><time datetime="<%= appeal.createdAt %>"><%= new Date(appeal.createdAt).toLocaleDateString('zh-CN') %></time></small></div><% if (appeal.actionPublicReason) { %><p><strong>原决定公开说明：</strong><%= appeal.actionPublicReason %></p><% } %><p><strong>申诉理由：</strong><%= appeal.reason %></p><p>状态：<%= appeal.status === 'resolved' ? (appeal.result === 'overturned' ? '原决定已撤销' : '原决定维持') : (appeal.hasStateConflict ? '发现后续状态变化，等待人工处理' : '等待复核') %></p><% if (appeal.publicExplanation) { %><p><strong>复核公开说明：</strong><%= appeal.publicExplanation %></p><% } %></article><% }); %></div>
+      </section>
+      <% if (pagination.totalPages > 1) { %><nav class="pagination" aria-label="申诉分页"><% if (pagination.hasPrevious) { %><a href="?page=<%= pagination.page - 1 %>">上一页</a><% } %><span>第 <%= pagination.page %> / <%= pagination.totalPages %> 页</span><% if (pagination.hasNext) { %><a href="?page=<%= pagination.page + 1 %>">下一页</a><% } %></nav><% } %>
+    </main>
+  </div>
+  <%- include('partials/footer') %>
+</body>
+</html>

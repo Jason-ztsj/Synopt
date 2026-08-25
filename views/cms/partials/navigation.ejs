@@ -1,0 +1,32 @@
+<%
+  const cmsNavPath = typeof currentPath === 'string' ? currentPath : '/cms';
+  const cmsNavUser = typeof currentUser !== 'undefined' && currentUser && typeof currentUser === 'object' ? currentUser : {};
+  const cmsNavIsAdmin = cmsNavUser.role === 'administrator';
+  const cmsNavItems = [
+    { href: '/cms', match: '/cms', exact: true, label: '概览', hint: '待办与近期动作' },
+    { href: '/cms/cases', match: '/cms/cases', label: '案件', hint: '举报与主动调查' },
+    { href: '/cms/videos', match: '/cms/videos', label: '视频', hint: '技术与治理状态' },
+    { href: '/cms/discussions', match: '/cms/discussions', label: '讨论', hint: '上下文与回复树' },
+    { href: '/cms/appeals', match: '/cms/appeals', label: '申诉', hint: '独立复核' },
+    { href: '/cms/users', match: '/cms/users', label: '账号', hint: '状态、角色与会话', admin: true },
+    { href: '/cms/taxonomy', match: '/cms/taxonomy', label: '分类与标签', hint: '目录治理', admin: true },
+    { href: '/cms/tasks', match: '/cms/tasks', label: '系统任务', hint: '验证与删除队列', admin: true },
+    { href: '/cms/audit', match: '/cms/audit', label: '审计日志', hint: '追加式操作记录', admin: true }
+  ];
+%>
+<aside class="cms-sidebar" aria-label="管理后台导航">
+  <nav class="cms-navigation">
+    <p class="cms-navigation__label">治理工作台</p>
+    <% cmsNavItems.filter(function(item) { return !item.admin || cmsNavIsAdmin; }).forEach(function(item) {
+      const active = item.exact ? cmsNavPath === item.match : cmsNavPath.startsWith(item.match);
+    %>
+      <a href="<%= item.href %>"<% if (active) { %> aria-current="page"<% } %>>
+        <strong><%= item.label %></strong><small><%= item.hint %></small>
+      </a>
+    <% }); %>
+  </nav>
+  <section class="cms-policy-note" aria-labelledby="cms-policy-title">
+    <h2 id="cms-policy-title">审核边界</h2>
+    <p>只处理行为、权利侵害与明确的平台规则，不以普通观点分歧或内容质量作为移除依据。</p>
+  </section>
+</aside>

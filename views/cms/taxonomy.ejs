@@ -1,0 +1,78 @@
+<%
+  const cmsCategories = Array.isArray(categories) ? categories : [];
+  const cmsTags = Array.isArray(tags) ? tags : [];
+  const cmsCsrf = typeof csrfToken === 'string' ? csrfToken : '';
+  const rootCategories = cmsCategories.filter(function (category) { return category.parent_id === null; });
+  const activeTags = cmsTags.filter(function (tag) { return tag.is_active === 1 && tag.merged_into_id === null; });
+%>
+<%- include('partials/page-start', { pageTitle: '分类与标签｜同见管理后台', currentPath: '/cms/taxonomy' }) %>
+  <header class="cms-page-heading">
+    <div><p class="cms-eyebrow">仅管理员</p><h1>分类与标签</h1><p>保留稳定 slug；停用项目不会出现在新投稿中，标签合并后旧链接会重定向到规范标签。</p></div>
+  </header>
+  <%- include('partials/feedback') %>
+
+  <div class="cms-dashboard-grid">
+    <section class="cms-panel cms-panel--span-2" aria-labelledby="category-title">
+      <header class="cms-panel__heading"><div><p class="cms-eyebrow">最多两级</p><h2 id="category-title">分类</h2></div><p><%= cmsCategories.length %> 项</p></header>
+      <details class="cms-create-disclosure"><summary>创建分类</summary>
+        <form class="cms-form cms-form--bordered" action="/cms/taxonomy/categories" method="post">
+          <input type="hidden" name="_csrf" value="<%= cmsCsrf %>">
+          <div class="cms-field-row">
+            <label class="cms-field"><span>显示名 <em>必填</em></span><input name="name" maxlength="40" required></label>
+            <label class="cms-field"><span>slug <em>必填</em></span><input name="slug" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" maxlength="48" required></label>
+          </div>
+          <div class="cms-field-row">
+            <label class="cms-field"><span>父分类</span><select name="parentId"><option value="">顶级分类</option><% rootCategories.filter(function (item) { return item.is_active === 1; }).forEach(function (item) { %><option value="<%= item.id %>"><%= item.name %></option><% }); %></select></label>
+            <label class="cms-field"><span>排序值</span><input type="number" name="sortOrder" min="-100000" max="100000" value="0" required></label>
+          </div>
+          <label class="cms-field"><span>说明</span><textarea name="description" maxlength="240" rows="2"></textarea></label>
+          <label class="cms-field"><span>创建理由 <em>必填</em></span><textarea name="internalReason" minlength="10" maxlength="1000" rows="2" required></textarea></label>
+          <button class="cms-button cms-button--primary" type="submit">创建分类</button>
+        </form>
+      </details>
+      <% if (!cmsCategories.length) { %><div class="cms-empty"><p>还没有分类。</p></div><% } %>
+      <div class="cms-taxonomy-list">
+        <% cmsCategories.forEach(function (category) { const active = category.is_active === 1; const hasChildren = cmsCategories.some(function(item) { return item.parent_id === category.id; }); const hasActiveChildren = cmsCategories.some(function(item) { return item.parent_id === category.id && item.is_active === 1; }); const parent = category.parent_id === null ? null : cmsCategories.find(function(item) { return item.id === category.parent_id; }); const inactiveParent = Boolean(parent) && parent.is_active !== 1; %>
+          <details class="cms-taxonomy-item">
+            <summary><span><strong><%= category.name %></strong><small>/<%= category.slug %><% if (category.parent_name) { %> · 隶属 <%= category.parent_name %><% } %></small></span><span class="cms-status cms-status--<%= active ? 'active' : 'disabled' %>"><%= active ? '启用' : '停用' %></span></summary>
+            <form class="cms-form" action="/cms/taxonomy/categories/<%= category.id %>/update" method="post">
+              <input type="hidden" name="_csrf" value="<%= cmsCsrf %>"><input type="hidden" name="expectedUpdatedAt" value="<%= category.updated_at %>">
+              <div class="cms-field-row"><label class="cms-field"><span>显示名</span><input name="name" value="<%= category.name %>" maxlength="40" required></label><label class="cms-field"><span>slug（不可修改）</span><input value="<%= category.slug %>" disabled></label></div>
+              <div class="cms-field-row"><label class="cms-field"><span>父分类</span><select name="parentId"><option value="">顶级分类</option><% if (!hasChildren) { rootCategories.filter(function (item) { return item.id !== category.id && (item.is_active === 1 || item.id === category.parent_id); }).forEach(function (item) { %><option value="<%= item.id %>"<% if (item.id === category.parent_id) { %> selected<% } %>><%= item.name %><%= item.is_active === 1 ? '' : '（已停用）' %></option><% }); } %></select><% if (hasChildren) { %><small>已有子分类，必须保持为顶级分类。</small><% } %></label><label class="cms-field"><span>排序值</span><input type="number" name="sortOrder" min="-100000" max="100000" value="<%= category.sort_order %>" required></label></div>
+              <label class="cms-field"><span>说明</span><textarea name="description" maxlength="240" rows="2"><%= category.description || '' %></textarea></label>
+              <label class="cms-field"><span>变更理由</span><textarea name="internalReason" minlength="10" maxlength="1000" rows="2" required></textarea></label>
+              <button class="cms-button cms-button--primary" type="submit">保存分类</button>
+            </form>
+            <% if ((active && hasActiveChildren) || (!active && inactiveParent)) { %><div class="cms-sensitive-notice"><strong>暂不能<%= active ? '停用' : '启用' %></strong><p><%= active ? '请先停用该分类下的有效子分类。' : '请先启用它的父分类。' %></p></div><% } else { %><form class="cms-inline-danger" action="/cms/taxonomy/categories/<%= category.id %>/<%= active ? 'deactivate' : 'activate' %>" method="post" data-confirm-message="确定<%= active ? '停用' : '启用' %>该分类吗？">
+              <input type="hidden" name="_csrf" value="<%= cmsCsrf %>"><input type="hidden" name="expectedUpdatedAt" value="<%= category.updated_at %>">
+              <label class="cms-field cms-field--grow"><span>操作理由</span><input name="internalReason" minlength="10" maxlength="1000" required></label>
+              <button class="cms-button <%= active ? 'cms-button--danger' : 'cms-button--quiet' %>" type="submit"><%= active ? '停用' : '启用' %></button>
+            </form><% } %>
+          </details>
+        <% }); %>
+      </div>
+    </section>
+
+    <section class="cms-panel cms-panel--span-2" aria-labelledby="tag-title">
+      <header class="cms-panel__heading"><div><p class="cms-eyebrow">稳定旧链接</p><h2 id="tag-title">标签</h2></div><p><%= cmsTags.length %> 项</p></header>
+      <details class="cms-create-disclosure"><summary>创建标签</summary>
+        <form class="cms-form cms-form--bordered" action="/cms/taxonomy/tags" method="post">
+          <input type="hidden" name="_csrf" value="<%= cmsCsrf %>"><div class="cms-field-row"><label class="cms-field"><span>显示名</span><input name="name" maxlength="32" required></label><label class="cms-field"><span>slug</span><input name="slug" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" maxlength="48" required></label></div>
+          <label class="cms-field"><span>创建理由</span><textarea name="internalReason" minlength="10" maxlength="1000" rows="2" required></textarea></label><button class="cms-button cms-button--primary" type="submit">创建标签</button>
+        </form>
+      </details>
+      <% if (!cmsTags.length) { %><div class="cms-empty"><p>还没有标签。</p></div><% } %>
+      <div class="cms-taxonomy-list">
+        <% cmsTags.forEach(function (tag) { const active = tag.is_active === 1; const merged = tag.merged_into_id !== null; %>
+          <details class="cms-taxonomy-item"><summary><span><strong>#<%= tag.name %></strong><small>/<%= tag.slug %> · <%= Number(tag.video_count || 0) %> 份视频<% if (merged) { %> · 合并至 #<%= tag.merged_into_name %><% } %></small></span><span class="cms-status cms-status--<%= merged ? 'merged' : active ? 'active' : 'disabled' %>"><%= merged ? '已合并' : active ? '启用' : '停用' %></span></summary>
+            <% if (!merged) { %>
+              <form class="cms-form" action="/cms/taxonomy/tags/<%= tag.id %>/update" method="post"><input type="hidden" name="_csrf" value="<%= cmsCsrf %>"><input type="hidden" name="expectedUpdatedAt" value="<%= tag.updated_at %>"><div class="cms-field-row"><label class="cms-field"><span>显示名</span><input name="name" value="<%= tag.name %>" maxlength="32" required></label><label class="cms-field"><span>slug（不可修改）</span><input value="<%= tag.slug %>" disabled></label></div><label class="cms-field"><span>变更理由</span><textarea name="internalReason" minlength="10" maxlength="1000" rows="2" required></textarea></label><button class="cms-button cms-button--primary" type="submit">保存显示名</button></form>
+              <form class="cms-inline-danger" action="/cms/taxonomy/tags/<%= tag.id %>/<%= active ? 'deactivate' : 'activate' %>" method="post" data-confirm-message="确定<%= active ? '停用' : '启用' %>该标签吗？"><input type="hidden" name="_csrf" value="<%= cmsCsrf %>"><input type="hidden" name="expectedUpdatedAt" value="<%= tag.updated_at %>"><label class="cms-field cms-field--grow"><span>操作理由</span><input name="internalReason" minlength="10" maxlength="1000" required></label><button class="cms-button <%= active ? 'cms-button--danger' : 'cms-button--quiet' %>" type="submit"><%= active ? '停用' : '启用' %></button></form>
+              <details class="cms-disclosure cms-disclosure--danger"><summary>合并到另一标签</summary><form class="cms-form" action="/cms/taxonomy/tags/<%= tag.id %>/merge" method="post" data-confirm-message="合并后旧 slug 会永久重定向，确定继续吗？"><input type="hidden" name="_csrf" value="<%= cmsCsrf %>"><input type="hidden" name="expectedUpdatedAt" value="<%= tag.updated_at %>"><label class="cms-field"><span>目标标签</span><select name="targetTagId" required><option value="">请选择</option><% activeTags.filter(function (item) { return item.id !== tag.id; }).forEach(function (item) { %><option value="<%= item.id %>">#<%= item.name %> (/<%= item.slug %>)</option><% }); %></select></label><label class="cms-field"><span>合并理由</span><textarea name="internalReason" minlength="10" maxlength="1000" rows="2" required></textarea></label><button class="cms-button cms-button--danger" type="submit">确认合并</button></form></details>
+            <% } else { %><div class="cms-sensitive-notice"><strong>已合并</strong><p>旧 slug 会重定向到目标标签，不能重新启用或再次合并。</p></div><% } %>
+          </details>
+        <% }); %>
+      </div>
+    </section>
+  </div>
+<%- include('partials/page-end') %>

@@ -1,0 +1,7 @@
+<%- include('head', { pageTitle: typeof pageTitle === 'string' ? pageTitle : '管理后台｜同见' }) %>
+<body class="cms-page">
+  <a class="cms-skip-link" href="#cms-main">跳到主要内容</a>
+  <%- include('header') %>
+  <div class="cms-shell">
+    <%- include('navigation', { currentPath: typeof currentPath === 'string' ? currentPath : '/cms' }) %>
+    <main class="cms-main" id="cms-main" tabindex="-1">

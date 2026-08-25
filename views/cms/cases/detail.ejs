@@ -1,0 +1,81 @@
+<%
+  const cmsCase = typeof moderationCase !== 'undefined' && moderationCase && typeof moderationCase === 'object'
+    ? moderationCase
+    : (typeof caseItem !== 'undefined' && caseItem && typeof caseItem === 'object' ? caseItem : (typeof caseRecord !== 'undefined' && caseRecord ? caseRecord : {}));
+  const cmsCaseNotes = typeof notes !== 'undefined' && Array.isArray(notes) ? notes : (Array.isArray(cmsCase.notes) ? cmsCase.notes : []);
+  const cmsCaseActions = typeof actions !== 'undefined' && Array.isArray(actions) ? actions : (Array.isArray(cmsCase.actions) ? cmsCase.actions : []);
+  const cmsCaseStaff = typeof staff !== 'undefined' && Array.isArray(staff) ? staff : (typeof assignees !== 'undefined' && Array.isArray(assignees) ? assignees : []);
+  const cmsCaseTarget = typeof target !== 'undefined' && target && typeof target === 'object' ? target : {};
+  const cmsCaseGrant = typeof mediaGrant !== 'undefined' && mediaGrant && typeof mediaGrant === 'object' ? mediaGrant : null;
+  const cmsCaseCsrf = typeof csrfToken === 'string' ? csrfToken : '';
+  const cmsCaseVersion = Number(cmsCase.version ?? cmsCase.moderationVersion ?? cmsCase.moderation_version ?? 0) || 0;
+  const cmsCaseTargetType = cmsCase.targetType || cmsCase.target_type || (cmsCase.videoId || cmsCase.video_id ? 'video' : 'discussion');
+  const cmsCaseTargetId = cmsCase.targetId || cmsCase.target_id || cmsCase.videoId || cmsCase.video_id || cmsCase.discussionId || cmsCase.discussion_id || '';
+  const cmsCaseVideoSensitive = cmsCaseTargetType === 'video' && (
+    (cmsCase.targetVisibility || cmsCase.visibility || cmsCaseTarget.visibility || 'public') !== 'public'
+    || Boolean(cmsCaseTarget.withdrawn_at || cmsCaseTarget.withdrawnAt)
+    || (cmsCase.targetModerationStatus || cmsCase.moderationStatus || cmsCaseTarget.moderation_status || cmsCaseTarget.moderationStatus || 'visible') !== 'visible'
+  );
+  const cmsCaseActorId = typeof currentUser !== 'undefined' ? currentUser?.id : null;
+  const cmsCaseIsAdministrator = typeof currentUser !== 'undefined' && currentUser?.role === 'administrator';
+  const cmsCaseIsAssigned = Boolean(cmsCaseActorId) && String(cmsCase.assigneeUserId || cmsCase.assignee_user_id || '') === String(cmsCaseActorId);
+  const cmsCaseTargetAuthorId = cmsCase.targetAuthorUserId || cmsCase.target_author_user_id || cmsCaseTarget.userId || cmsCaseTarget.user_id || null;
+  const cmsCaseReporterId = cmsCase.reporterUserId || cmsCase.reporter_user_id || null;
+  const cmsCaseActiveStaff = cmsCaseStaff.filter(function(person) {
+    return person.status === 'active'
+      && String(person.id) !== String(cmsCase.assigneeUserId || cmsCase.assignee_user_id || '')
+      && String(person.id) !== String(cmsCaseTargetAuthorId || '')
+      && String(person.id) !== String(cmsCaseReporterId || '');
+  });
+  const cmsCaseReasonLabel = typeof reportReasons !== 'undefined' && reportReasons
+    ? reportReasons[cmsCase.reasonCategory || cmsCase.reason_category]
+    : '';
+  const cmsCaseStatusLabel = ({ open: '待处理', in_review: '复核中', resolved: '已结案' })[cmsCase.status] || cmsCase.status || '未知';
+  const cmsCaseOutcomeLabel = ({ violation_confirmed: '确认违规', no_violation: '未发现违规' })[cmsCase.resolution || cmsCase.outcome] || cmsCase.resolution || cmsCase.outcome || '';
+  const cmsCaseDate = function(value) { const date = value ? new Date(value) : null; return date && !Number.isNaN(date.getTime()) ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(date) : '—'; };
+%>
+<%- include('../partials/page-start', { pageTitle: '案件 #' + (cmsCase.id || '') + '｜同见管理后台', currentPath: '/cms/cases/' + (cmsCase.id || '') }) %>
+  <nav class="cms-breadcrumb" aria-label="面包屑"><a href="/cms/cases">案件</a><span aria-hidden="true">/</span><span aria-current="page">#<%= cmsCase.id || '—' %></span></nav>
+  <header class="cms-page-heading cms-page-heading--detail"><div><p class="cms-eyebrow"><%= ['staff','proactive','investigation'].includes(cmsCase.source) ? '主动调查' : '成员举报' %></p><h1>案件 #<%= cmsCase.id || '—' %></h1><p><%= cmsCase.reportCategoryLabel || cmsCase.report_category_label || cmsCase.reportCategory || cmsCase.report_category || cmsCaseReasonLabel || cmsCase.reasonCategory || '未分类' %> · 创建于 <%= cmsCaseDate(cmsCase.createdAt || cmsCase.created_at) %></p></div><div class="cms-heading-status"><span class="cms-status cms-status--<%= cmsCase.status || 'unknown' %>"><%= cmsCaseStatusLabel %></span><% if (cmsCaseOutcomeLabel) { %><strong><%= cmsCaseOutcomeLabel %></strong><% } %></div></header>
+  <%- include('../partials/feedback') %>
+
+  <div class="cms-detail-grid">
+    <div class="cms-detail-main">
+      <section class="cms-panel" aria-labelledby="case-target-title">
+        <header class="cms-panel__heading"><div><p class="cms-eyebrow">唯一目标</p><h2 id="case-target-title"><%= cmsCaseTargetType === 'video' ? '视频' : '讨论' %></h2></div><a href="/cms/<%= cmsCaseTargetType === 'video' ? 'videos' : 'discussions' %>/<%= cmsCaseTargetId %>">打开完整记录</a></header>
+        <dl class="cms-definition-grid"><div><dt>对象 ID</dt><dd><code><%= cmsCaseTargetId || '—' %></code></dd></div><div><dt>标题或摘要</dt><dd><%= cmsCase.targetTitle || cmsCase.videoTitle || cmsCase.discussionTitle || cmsCase.targetPreview || cmsCaseTarget.title || '—' %></dd></div><div><dt>作者</dt><dd><%= cmsCase.targetAuthorDisplayName || cmsCase.authorDisplayName || cmsCase.authorUsername || cmsCaseTarget.owner_display_name || cmsCaseTarget.owner_username || '—' %></dd></div><div><dt>当前治理状态</dt><dd><%= cmsCase.targetModerationStatus || cmsCase.moderationStatus || cmsCaseTarget.moderation_status || 'visible' %></dd></div></dl>
+        <% if (cmsCaseVideoSensitive) { %>
+          <div class="cms-sensitive-notice"><strong>受限视频</strong><p>私密、不公开、作者撤回或治理隐藏的视频，未取得当前案件短时授权前只显示必要元数据。</p></div>
+          <% if (cmsCaseGrant && ['ready','ready_with_warnings'].includes(cmsCaseTarget.validation_status)) { %><div class="cms-media-frame"><video controls playsinline preload="metadata"><source src="/cms/videos/<%= cmsCaseTargetId %>/media?caseId=<%= cmsCase.id %>" type="<%= cmsCaseTarget.media_type || 'video/mp4' %>">浏览器无法播放该视频。</video></div><p class="cms-expiry-note">授权到期：<%= cmsCaseDate(cmsCaseGrant.expiresAt) %>。Range 请求会复用当前授权，不重复写审计。</p>
+          <% } else if (cmsCase.status === 'in_review' && cmsCaseIsAssigned) { %><form class="cms-inline-form" action="/cms/cases/<%= cmsCase.id %>/media-grants" method="post"><input type="hidden" name="_csrf" value="<%= cmsCaseCsrf %>"><input type="hidden" name="expectedVersion" value="<%= cmsCaseVersion %>"><input type="hidden" name="videoId" value="<%= cmsCaseTargetId %>"><label class="cms-field cms-field--grow"><span>访问理由 <em>必填</em></span><input type="text" name="reason" minlength="10" maxlength="500" required></label><button class="cms-button cms-button--primary" type="submit">申请短时访问</button></form><% } else if (cmsCase.status === 'in_review') { %><p class="cms-expiry-note">仅当前案件负责人可以申请媒体访问。</p><% } %>
+        <% } %>
+      </section>
+
+      <section class="cms-panel" aria-labelledby="case-report-title">
+        <header class="cms-panel__heading"><div><p class="cms-eyebrow">提交内容</p><h2 id="case-report-title">举报说明</h2></div></header>
+        <div class="cms-prose"><p><%= cmsCase.description || cmsCase.reportDescription || cmsCase.report_description || '该案件由工作人员主动建立，没有成员举报说明。' %></p></div>
+        <dl class="cms-definition-grid"><div><dt>举报人</dt><dd><%= cmsCase.reporterDisplayName || cmsCase.reporterUsername || (['staff','proactive','investigation'].includes(cmsCase.source) ? '工作人员主动调查' : '已隐藏身份') %></dd></div><div><dt>提交时间</dt><dd><%= cmsCaseDate(cmsCase.createdAt || cmsCase.created_at) %></dd></div></dl>
+      </section>
+
+      <section class="cms-panel" aria-labelledby="case-notes-title">
+        <header class="cms-panel__heading"><div><p class="cms-eyebrow">仅工作人员可见</p><h2 id="case-notes-title">内部备注</h2></div></header>
+        <% if (!cmsCaseNotes.length) { %><div class="cms-empty"><p>还没有内部备注。</p></div><% } else { %><ol class="cms-note-list"><% cmsCaseNotes.forEach(function(note) { %><li><div><strong><%= note.authorName || note.authorDisplayName || note.authorUsername || '工作人员' %></strong><time datetime="<%= note.createdAt || note.created_at || '' %>"><%= cmsCaseDate(note.createdAt || note.created_at) %></time></div><p><%= note.body || note.note || note.content || '' %></p></li><% }); %></ol><% } %>
+        <% if (cmsCase.status === 'in_review' && cmsCaseIsAssigned) { %><form class="cms-form cms-form--bordered" action="/cms/cases/<%= cmsCase.id %>/notes" method="post"><input type="hidden" name="_csrf" value="<%= cmsCaseCsrf %>"><input type="hidden" name="expectedVersion" value="<%= cmsCaseVersion %>"><label class="cms-field"><span>新增内部备注 <em>必填</em></span><textarea name="body" minlength="2" maxlength="2000" rows="4" required></textarea><small>备注只追加，不会展示给举报人、作者或公众。</small></label><button class="cms-button cms-button--primary" type="submit">追加备注</button></form><% } %>
+      </section>
+
+      <section class="cms-panel" aria-labelledby="case-history-title">
+        <header class="cms-panel__heading"><div><p class="cms-eyebrow">案件轨迹</p><h2 id="case-history-title">治理动作</h2></div></header>
+        <% if (!cmsCaseActions.length) { %><div class="cms-empty"><p>该案件尚无治理动作。</p></div><% } else { %><ol class="cms-timeline"><% cmsCaseActions.forEach(function(action) { %><li><div><strong><%= action.actionLabel || action.actionType || action.action || '操作' %></strong><time datetime="<%= action.createdAt || action.created_at || '' %>"><%= cmsCaseDate(action.createdAt || action.created_at) %></time></div><p><%= action.publicReason || action.public_reason || '未提供公开说明' %></p><small><%= action.actorName || action.actorDisplayName || action.actorUsername || '系统' %></small></li><% }); %></ol><% } %>
+      </section>
+    </div>
+
+    <aside class="cms-detail-side" aria-label="案件操作">
+      <section class="cms-panel cms-panel--sticky" aria-labelledby="case-control-title"><header class="cms-panel__heading"><div><h2 id="case-control-title">案件控制</h2></div></header>
+        <dl class="cms-stack-definition"><div><dt>负责人</dt><dd><%= cmsCase.assigneeDisplayName || cmsCase.assigneeUsername || cmsCase.assigneeName || '未认领' %></dd></div><div><dt>版本</dt><dd><%= cmsCaseVersion %></dd></div><div><dt>最近更新</dt><dd><%= cmsCaseDate(cmsCase.updatedAt || cmsCase.updated_at) %></dd></div></dl>
+        <% if (cmsCase.status === 'open') { %><form class="cms-form cms-action-form" action="/cms/cases/<%= cmsCase.id %>/claim" method="post"><input type="hidden" name="_csrf" value="<%= cmsCaseCsrf %>"><input type="hidden" name="expectedVersion" value="<%= cmsCaseVersion %>"><label class="cms-field"><span>认领理由 <em>必填</em></span><textarea name="internalReason" minlength="5" maxlength="500" rows="2" required></textarea></label><button class="cms-button cms-button--primary cms-button--block" type="submit">认领案件</button></form><% } %>
+        <% if (cmsCase.status === 'in_review' && cmsCaseActiveStaff.length && (cmsCaseIsAssigned || cmsCaseIsAdministrator)) { %><details class="cms-disclosure"><summary>转交案件</summary><form class="cms-form" action="/cms/cases/<%= cmsCase.id %>/transfer" method="post"><input type="hidden" name="_csrf" value="<%= cmsCaseCsrf %>"><input type="hidden" name="expectedVersion" value="<%= cmsCaseVersion %>"><label class="cms-field"><span>转交给 <em>必填</em></span><select name="assigneeUserId" required><option value="">请选择</option><% cmsCaseActiveStaff.forEach(function(person) { %><option value="<%= person.id %>"><%= person.displayName || person.username || person.id %></option><% }); %></select></label><label class="cms-field"><span>转交理由 <em>必填</em></span><textarea name="internalReason" minlength="5" maxlength="500" rows="2" required></textarea></label><button class="cms-button cms-button--quiet cms-button--block" type="submit">确认转交</button></form></details><% } %>
+        <% if (cmsCase.status === 'in_review' && cmsCaseIsAssigned) { %><details class="cms-disclosure cms-disclosure--decision"><summary>作出结案决定</summary><form class="cms-form" action="/cms/cases/<%= cmsCase.id %>/resolve" method="post" data-confirm-message="确定提交案件结论吗？提交后举报人将看到结果和公开说明。"><input type="hidden" name="_csrf" value="<%= cmsCaseCsrf %>"><input type="hidden" name="expectedVersion" value="<%= cmsCaseVersion %>"><fieldset class="cms-choice-group"><legend>结论 <em>必填</em></legend><label><input type="radio" name="resolution" value="violation_confirmed" required><span><strong>确认违规</strong><small>存在明确规则或权利侵害</small></span></label><label><input type="radio" name="resolution" value="no_violation" required><span><strong>未发现违规</strong><small>若目标仍隐藏或移除，请先恢复</small></span></label></fieldset><label class="cms-field"><span>公开说明 <em>必填</em></span><textarea name="publicExplanation" minlength="20" maxlength="2000" rows="5" required></textarea><small>举报人和受影响作者可能看到这段说明。</small></label><label class="cms-field"><span>内部结案备注 <em>必填</em></span><textarea name="internalReason" minlength="5" maxlength="2000" rows="3" required></textarea></label><button class="cms-button cms-button--danger cms-button--block" type="submit">提交结论</button></form></details><% } else if (cmsCase.status === 'in_review' && !cmsCaseIsAssigned) { %><div class="cms-sensitive-notice"><strong>当前由其他工作人员负责</strong><p>只有案件负责人可以追加备注、访问私密媒体、审核目标和提交结论。</p></div><% } %>
+      </section>
+    </aside>
+  </div>
+<%- include('../partials/page-end') %>
