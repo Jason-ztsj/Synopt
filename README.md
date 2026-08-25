@@ -1,12 +1,12 @@
-# Tongjian (同见)
+# Synopt (同见)
 
 **English** · [中文版](README.zh-CN.md)
 
 > **About “vibe coding”**
-> This is a project built through deep collaboration with an AI, in the “vibe coding” style: most of the code was written by an AI, while the author set the direction, made the architecture and security decisions, and reviewed and verified each piece. This is a deliberate, modern engineering choice, and it is also an honest account of where this project came from — the repository contains a real, runnable implementation with full unit and integration tests, not a demo. An AI did a large share of the typing, while the positioning, trade-offs, and design judgments behind *Tongjian* have always been in human hands.
+> This is a project built through deep collaboration with an AI, in the “vibe coding” style: most of the code was written by an AI, while the author set the direction, made the architecture and security decisions, and reviewed and verified each piece. This is a deliberate, modern engineering choice, and it is also an honest account of where this project came from — the repository contains a real, runnable implementation with full unit and integration tests, not a demo. An AI did a large share of the typing, while the positioning, trade-offs, and design judgments behind *Synopt* have always been in human hands.
 > If you are skeptical of quality because it was “AI-generated”: please run the tests and read the code to verify it yourself — an honest origin is not a reason to be dismissed.
 
-*Tongjian* is an experimental MVP for open knowledge and non-profit video sharing: anyone can browse videos; after registering and signing in, you can upload MP4, MOV, MKV, or WebM, choose a Creative Commons license, and join discussions using Markdown, LaTeX, and a formula keyboard. The project prioritizes simplicity, self-hosting, and local resources — it does not depend on an external database or a runtime CDN.
+*Synopt* is an experimental MVP for open knowledge and non-profit video sharing: anyone can browse videos; after registering and signing in, you can upload MP4, MOV, MKV, or WebM, choose a Creative Commons license, and join discussions using Markdown, LaTeX, and a formula keyboard. The project prioritizes simplicity, self-hosting, and local resources — it does not depend on an external database or a runtime CDN.
 
 The project’s name is 同见 (Tongjian). The English name is Synopt, which was chosen later — it was not the project’s original name. Because the project began before the English name existed, a few legacy identifiers remain in the code (e.g., `tongjian_session` / `tongjian_csrf` cookies and `tongjian:*` browser-storage keys) for continuity; they are internal and do not represent a branding preference. The database file is `synopt.sqlite`.
 
