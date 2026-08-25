@@ -936,9 +936,9 @@ test('治理目标删除后保留内部作者关联，同时公开映射与 CMS 
   await withDatabase('tongjian-cms-deleted-target-link-', (database, service) => {
     const owner = seedUser(database, 'deleted-target-owner', 'moderator');
     const reviewer = seedUser(database, 'deleted-target-reviewer', 'moderator');
-    seedUser(database, 'deleted-target-admin', 'administrator');
+    const admin = seedUser(database, 'deleted-target-admin', 'administrator');
     seedVideo(database, 'deleted-governed-video', owner.id);
-    seedVideo(database, 'deleted-discussion-video', reviewer.id);
+    seedVideo(database, 'deleted-discussion-video', admin.id);
     const discussion = seedDiscussion(
       database,
       'deleted-discussion-video',
