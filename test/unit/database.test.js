@@ -104,7 +104,7 @@ function removeV5SchemaFromDowngradeFixture(database, { rebuildDiscussions = fal
 }
 
 test('SQLite 持久化映射正确，视频倒序、讨论正序且查询索引实际存在', async () => {
-  const directory = await mkdtemp(path.join(tmpdir(), 'gongying-db-test-'));
+  const directory = await mkdtemp(path.join(tmpdir(), 'synopt-db-test-'));
   const databasePath = path.join(directory, 'nested', 'test.sqlite');
   let database;
   try {

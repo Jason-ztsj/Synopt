@@ -5,10 +5,10 @@ import test from 'node:test';
 import { loadConfig } from '../../src/config.js';
 
 test('配置默认值、相对路径与 MiB 字节换算正确', () => {
-  const cwd = '/tmp/gongying-config-test';
+  const cwd = '/tmp/synopt-config-test';
   const config = loadConfig({}, cwd);
   assert.equal(config.port, 3000);
-  assert.equal(config.databasePath, path.join(cwd, 'data/gongying.sqlite'));
+  assert.equal(config.databasePath, path.join(cwd, 'data/synopt.sqlite'));
   assert.equal(config.videoStoragePath, path.join(cwd, 'data/videos'));
   assert.equal(config.avatarStoragePath, path.join(cwd, 'data/avatars'));
   assert.equal(config.temporaryStoragePath, path.join(cwd, 'data/videos/.tmp'));
@@ -38,8 +38,8 @@ test('配置默认值、相对路径与 MiB 字节换算正确', () => {
 test('配置接受 Cloudflare 模式和绝对路径', () => {
   const config = loadConfig({
     PORT: '8080',
-    DATABASE_PATH: '/var/lib/gongying/db.sqlite',
-    VIDEO_STORAGE_PATH: '/srv/gongying/videos',
+    DATABASE_PATH: '/var/lib/synopt/db.sqlite',
+    VIDEO_STORAGE_PATH: '/srv/synopt/videos',
     MAX_UPLOAD_MB: '1.5',
     DISCUSSION_COOLDOWN_SECONDS: '45',
     SESSION_TTL_HOURS: '24',

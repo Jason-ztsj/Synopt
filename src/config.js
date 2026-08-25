@@ -2,7 +2,7 @@ import path from 'node:path';
 
 const DEFAULTS = Object.freeze({
   PORT: '3000',
-  DATABASE_PATH: './data/gongying.sqlite',
+  DATABASE_PATH: './data/synopt.sqlite',
   VIDEO_STORAGE_PATH: './data/videos',
   MAX_UPLOAD_MB: '1024',
   MEDIA_UPLOAD_CHUNK_MB: '16',

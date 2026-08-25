@@ -1,157 +1,163 @@
-# 同见
+# Tongjian (同见)
 
-“同见”是一个面向开放知识与非营利视频分享的实验性 MVP：任何人都可以浏览视频；注册并登录后，可以上传 MP4、MOV、MKV 或 WebM、选择 Creative Commons 许可证，并用 Markdown、LaTeX 和公式键盘参与讨论。项目优先考虑简洁、自行托管、ARM64 开发板和本地资源，不依赖外部数据库或运行时 CDN。
+**English** · [中文版](README.zh-CN.md)
 
-当前只有中文名“同见”，正式英文名尚未确定。仓库里的 `gongying` 等旧内部标识暂时保留用于兼容，不代表新的英文品牌。
+> **About “vibe coding”**
+> This is a project built through deep collaboration with an AI, in the “vibe coding” style: most of the code was written by an AI, while the author set the direction, made the architecture and security decisions, and reviewed and verified each piece. This is a deliberate, modern engineering choice, and it is also an honest account of where this project came from — the repository contains a real, runnable implementation with full unit and integration tests, not a demo. An AI did a large share of the typing, while the positioning, trade-offs, and design judgments behind *Tongjian* have always been in human hands.
+> If you are skeptical of quality because it was “AI-generated”: please run the tests and read the code to verify it yourself — an honest origin is not a reason to be dismissed.
 
-> 这是一次产品与技术尝试，目前没有实际运营或开放公网服务的计划。CMS V1 提供本地举报、审核、申诉和审计闭环，但不应被理解为已经具备生产平台所需的完整合规、法务、安全运维或事件响应能力。
+*Tongjian* is an experimental MVP for open knowledge and non-profit video sharing: anyone can browse videos; after registering and signing in, you can upload MP4, MOV, MKV, or WebM, choose a Creative Commons license, and join discussions using Markdown, LaTeX, and a formula keyboard. The project prioritizes simplicity, self-hosting, and local resources — it does not depend on an external database or a runtime CDN.
 
-## 当前功能
+The project’s name is 同见 (Tongjian). The English name is Synopt, which was chosen later — it was not the project’s original name. Because the project began before the English name existed, a few legacy identifiers remain in the code (e.g., `tongjian_session` / `tongjian_csrf` cookies and `tongjian:*` browser-storage keys) for continuity; they are internal and do not represent a branding preference. The database file is `synopt.sqlite`.
 
-- 首页是面向横屏长视频的内容目录，支持顶栏搜索、分类和标签筛选；当前按上传时间倒序展示，观看不要求登录。
-- 用户名、显示名称和密码注册；账号菜单提供公开资料、我的稿件、我的讨论、举报、申诉、通知、设置和退出入口，工作人员还会看到“管理后台”。
-- 用户可以设置显示名称、500 字以内的简介和方形头像；头像会真实解码、去除原图元数据并规范化为 WebP。用户名保持不可修改，并拥有只展示公开稿件的作者主页。
-- 只有登录用户能上传视频或发布讨论；既有 MVP 数据会原样保留，迁移前的内容可能没有关联账号。
-- 上传标题、创作者署名、主分类、最多 8 个标签、可选描述、封面和媒体文件；支持 CC0 1.0、CC BY 4.0、CC BY-NC 4.0、CC BY-ND 4.0、CC BY-NC-ND 4.0。
-- 自定义封面只接受严格 16:9、1280×720 至 3840×2160、最大 5 MiB 的 JPEG/PNG/WebP；服务端真实解码、去元数据并统一存为 WebP。未上传时，验证器从视频第一帧生成 1280×720 JPEG 封面。
-- 浏览器在 Web Worker 中读取真实容器和轨道；需要时只复制压缩后的码流并重封装，不重新编码。H.264/AAC、VP8/VP9/AV1 + Opus 规范为对应容器，H.264 + MP3/Opus/FLAC 与 HEVC 属有限兼容，HEVC/AAC 规范为实验性 MP4。
-- 服务端不信任文件名、MIME 或浏览器上报结果。新媒体先进入不可公开的隔离区，由独立进程执行 ffprobe 全文件探测、结构检查、SHA-256 和 FFmpeg 完整解码；只有 `ready` 或 `ready_with_warnings` 才会出现在首页、播放器和讨论区。
-- 原生播放器支持 `GET`、`HEAD` 和单段 HTTP Range，可播放并拖动进度。
-- 顶层讨论有标题并默认折叠；回复形成可追溯的树，逻辑深度不限而界面缩进受限。正文支持安全渲染的 Markdown、行内/块级 LaTeX 和实时预览。
-- 视频用"价值"评价：三档（受益匪浅 / 有所收获 / 收获不大），先揭示、后投票；讨论/回复保留"认同/反对"计数。一个账号对同一目标只有一个可取消、可切换的选择。
-- 目录（首页/搜索/分类/标签）按公开、可复算的"价值热排序"；"典范视频"页按时间无关的价值排序。规则、参数、输入与数据边界见 `/algorithm` 页与 [`docs/algorithm.md`](docs/algorithm.md)。
-- 作者可以修改自己的讨论标题和正文，页面公开显示修改次数与最后修改时间；删除有回复的内容时只留下匿名墓碑，不会连带删除他人的回复。
-- “我的稿件”支持可逆撤回和重新发布；永久删除必须先撤回并输入完整标题。处于审核状态、存在未结案件/申诉，或仍处于申诉窗口的治理证据不允许被作者删除。通过检查后，文件删除先持久入队再立即尝试，失败由验证器退避重试；只有删除前真正公开、验证通过且审核可见的稿件，才在原链接保留只读讨论档案。
-- 站内通知支持回复、稿件的"高价值"认可和预留的系统消息；未读投票按作品与不同账号的净状态聚合，取消再重投不会刷高计数（低/中档价值不打扰作者）。页面打开时每 30 秒更新一次未读数。
-- 登录成员可以举报不属于自己且当前可见的视频或讨论，并在账号中心查看本人举报进度；受视频/讨论隐藏或移除、账号暂停影响的成员可查看涉及本人的完整治理决定，并在期限内提交一次申诉。举报与决定页保留最多 2,000 字的完整公开说明，系统通知只提供前 1,000 个 Unicode 字符的预览；举报人不看到内部备注、工作人员身份或敏感证据。
-- 独立 `/cms` 工作区供审核员和管理员处理案件、视频和讨论；案件要先被认领，只有当前负责人能追加备注、审核目标、授权私密媒体或结案。管理员可以介入转交，但不能跳过认领直接执行这些案内动作。管理员另外管理账号状态与角色、分类标签、失败任务，以及除本人利益冲突对象外的全量审计。后台沿用账号会话和 CSRF，并要求当前会话重新输入密码。
-- 审核隐藏和移除不会伪装成媒体损坏，也不会直接删除视频文件。视频技术验证、作者可见性/撤回和平台治理状态相互独立；讨论审核使用占位或墓碑保留回复树。
-- 讨论编辑器集成本地 MathLive 公式键盘，可通过模板插入行内或块级公式，并利用数学输入框的结构化光标移动编辑公式；保存格式仍是便于迁移的 Markdown/LaTeX 文本。
-- 讨论同时按账号和来源 IP 限流；注册、登录也有短暂的来源 IP 冷却。应用不保存或展示 IP。
-- SQLite 保存账号、会话、通知、视频元数据、讨论、举报案件、审核动作、申诉和审计；视频、封面和头像文件分别保存在数据目录中。
+> This is a product and technical experiment, with no current plans for actual operation or a public service. CMS V1 provides a local reporting, moderation, appeal, and audit loop, but should not be understood as already having the full compliance, legal, security-operations, or incident-response capabilities of a production platform.
 
-账号与安全相关的当前边界：
+## Current features
 
-- 密码使用 Node.js `scrypt` 加随机盐保存，不存储明文密码。
-- 浏览器只保存随机会话令牌；数据库保存它的 SHA-256 摘要。会话默认有效 168 小时。
-- 注册、登录、退出、上传和发布讨论等写操作均校验 CSRF 令牌；会话与 CSRF Cookie 使用 `HttpOnly`、`SameSite=Lax`，HTTPS 部署时还应启用 `Secure`。
-- 当前没有邮箱验证、密码找回、多因素认证、用户自助会话列表或存储配额。CMS V1 提供账号暂停、工作人员撤销全部会话、内容举报与审核，但不提供把账号设为 `disabled`、绕过媒体验证或立即物理删除视频的动作。
-- `suspended` 账号仍可验证密码登录，但只能浏览公开内容、查看本人举报和决定、提交申诉、修改密码与退出；上传、投票、讨论、资料修改和 CMS 均由服务端拒绝。
-- 修改密码会撤销其他设备上的会话；账号删除不可恢复，可选择永久删除本人稿件和按墓碑规则删除本人讨论，未选择的内容会匿名保留。一并删除也受未结案件、未结申诉和申诉窗口内治理证据的保留约束，不会级联清除它们。
-- 当前局域网 HTTP 不是安全上下文，只提供站内通知；页面打开期间的浏览器系统通知必须经用户授权并通过 HTTPS 访问。关闭网页后的 Web Push 尚未实现。
-- 注册/登录、CMS 密码再认证、讨论、举报和图片处理冷却都在单进程内存中，重启后清空，多实例之间也不共享。注册和登录按来源 IP，CMS 再认证同时按工作人员账号和来源 IP；图片规范化另有全局并发上限，满载时会立即返回可重试错误。
+- The home page is a directory for landscape long-form video, with top-bar search and category/tag filtering; it is currently ordered by upload time (descending), and browsing does not require sign-in.
+- Username, display name, and password registration; the account menu offers public profile, my videos, my discussions, reports, appeals, notifications, settings, and sign-out, plus “admin console” for staff.
+- Users can set a display name, a bio up to 500 characters, and a square avatar; avatars are actually decoded, stripped of original metadata, and normalized to WebP. Usernames are immutable, and each user has an author page showing only public videos.
+- Only signed-in users can upload videos or start discussions; legacy MVP data is preserved as-is, and content from before migration may not be linked to an account.
+- Upload supports title, creator credit, primary category, up to 8 tags, an optional description, a cover, and the media file; licenses: CC0 1.0, CC BY 4.0, CC BY-NC 4.0, CC BY-ND 4.0, CC BY-NC-ND 4.0.
+- Custom covers accept strictly 16:9, 1280×720 to 3840×2160, up to 5 MiB JPEG/PNG/WebP; the server actually decodes, strips metadata, and stores as WebP. If none is uploaded, the validator generates a 1280×720 JPEG cover from the first frame.
+- The browser reads the real container and tracks in a Web Worker, copying only the compressed bitstream and re-muxing when needed — never re-encoding. H.264/AAC and VP8/VP9/AV1 + Opus are normalized to the matching container; H.264 + MP3/Opus/FLAC and HEVC are limited compatibility; HEVC/AAC is normalized as experimental MP4.
+- The server never trusts file names, MIME types, or browser-reported results. New media enters a non-public quarantine area and is validated by a separate process: ffprobe full-file probing, structure checks, SHA-256, and full FFmpeg decode. Only `ready` or `ready_with_warnings` appear on the home page, in the player, or in discussions.
+- The native player supports `GET`, `HEAD`, and single-range HTTP Range, so playback and seeking work.
+- Top-level discussions have titles and are collapsed by default; replies form a traceable tree with no logical depth limit (indentation is bounded). Bodies use safely-rendered Markdown, inline/block LaTeX, and live preview.
+- Videos use a “value” rating with three tiers (受益匪浅 / 有所收获 / 收获不大 — “got a lot / some / little”); it reveals then votes. Discussions/replies keep “approve/disapprove” counts. One account has at most one removable, switchable choice per target.
+- The catalogue (home / search / category / tag) is ordered by a public, recomputable “value heat” ranking; a “featured video” page is ordered by time-independent value. The rules, parameters, inputs, and data boundary are at `/algorithm` and [`docs/algorithm.md`](docs/algorithm.md).
+- Authors can edit their own discussion titles and bodies; the page publicly shows the edit count and last-modified time. Deleting content that has replies leaves only an anonymous tombstone and never cascades to others’ replies.
+- “My videos” supports reversible withdrawal and re-publishing; permanent deletion requires prior withdrawal and typing the full title. Governance evidence under review, with an open case/appeal, or still within the appeal window cannot be deleted by the author. When checks pass, file deletion is first persisted to a queue, then attempted immediately, with backoff retries on failure by the validator; only videos that were genuinely public, validated, and moderation-visible keep a read-only discussion archive at the original URL.
+- In-app notifications cover replies, a “high value” endorsement of videos, and reserved system messages; unread votes are aggregated by work and by the net state of different accounts — cancel-and-re-vote does not inflate the count (low/medium value does not bother the author). The unread count refreshes every 30 seconds while the page is open.
+- Signed-in members can report a video or discussion that does not belong to them and is currently visible, and track their own report progress in the account center; members affected by a video/discussion hide/remove or an account suspension can view the full governance decision involving them and file one appeal within the deadline. Report and decision pages keep up to 2,000 characters of full public explanation; system notifications only preview the first 1,000 Unicode characters; reporters do not see internal notes, staff identity, or sensitive evidence.
+- A separate `/cms` workspace lets moderators and administrators handle cases, videos, and discussions. A case must be claimed first; only the current owner can add notes, moderate the target, authorize private media, or close it. An administrator can intervene/transfer but cannot skip claiming to perform these in-case actions. Administrators also manage account status and roles, categories/tags, failed tasks, and the full audit except for their own conflicts of interest. The backend reuses the account session and CSRF and requires re-entering the password for the current session.
+- Moderation hide and removal do not pretend to be media corruption, and never directly delete the video file. Technical validation, author visibility/withdrawal, and platform governance state are independent; discussion moderation uses placeholders or tombstones to preserve the reply tree.
+- The discussion editor integrates a local MathLive formula keyboard, which can insert inline/block formulas via templates and move the cursor structurally inside math inputs; the stored form is still portable Markdown/LaTeX text.
+- Discussions are rate-limited by both account and source IP; registration and sign-in also have a brief source-IP cooldown. The app does not store or display IPs.
+- SQLite stores accounts, sessions, notifications, video metadata, discussions, report cases, moderation actions, appeals, and audit; video, cover, and avatar files are stored in the data directory.
 
-## 技术要求
+Current account/security boundaries:
+
+- Passwords use Node.js `scrypt` with a random salt; plaintext is never stored.
+- The browser only keeps a random session token; the database stores its SHA-256 digest. Sessions are valid for 168 hours by default.
+- Write operations — registration, sign-in, sign-out, upload, starting discussions — all verify a CSRF token; the session and CSRF cookies use `HttpOnly`, `SameSite=Lax`, and should also enable `Secure` in HTTPS deployments.
+- Currently there is no email verification, password reset, two-factor auth, user-facing session list, or storage quota. CMS V1 provides account suspension, staff-wide session revocation, content reporting and moderation, but does not offer setting an account `disabled`, bypassing media validation, or physically deleting a video immediately.
+- A `suspended` account can still sign in with a valid password but can only browse public content, view its own reports and decisions, submit appeals, change its password, and sign out; upload, voting, discussions, profile changes, and CMS are all rejected server-side.
+- Changing the password revokes sessions on other devices; account deletion is irreversible and can optionally permanently delete the user’s videos and delete their discussions under tombstone rules (unselected content is anonymized and kept). Deletion is also constrained by open cases, open appeals, and the appeal-window governance-evidence retention, and never cascades to clear them.
+- Current LAN HTTP is not a secure context and only offers in-page notifications; browser system notifications during an open page require user authorization and HTTPS access. Web Push after closing the page is not yet implemented.
+- Registration/sign-in, CMS password re-authentication, discussion, report, and image-processing cooldowns all live in single-process memory, clear on restart, and are not shared across instances. Registration and sign-in are keyed by source IP; CMS re-authentication counts both the staff account and the source IP; image normalization has an additional global concurrency cap and returns a retryable error at saturation.
+
+## Technical requirements
 
 - Node.js 24 LTS
-- npm（随 Node.js 提供）
-- FFmpeg 与 ffprobe（直接在宿主机运行时，Web 应用使用 FFmpeg 规范化用户图片，验证器同时使用两者）
-- Docker Engine 与 Docker Compose 插件（仅容器部署需要）
+- npm (bundled with Node.js)
+- FFmpeg and ffprobe (when running directly on the host: the web app uses FFmpeg to normalize user images, and the validator uses both)
+- Docker Engine and the Docker Compose plugin (only needed for container deployment)
 
-应用使用 Node.js 内置 `node:sqlite`，无需安装 SQLite 服务或编译原生数据库扩展。MathLive 和 KaTeX 都由 npm 安装并从本机提供，浏览器运行时不访问 CDN。官方 Node 24 slim 镜像支持常见的 AMD64 和 ARM64 Linux 主机。
+The app uses Node.js’s built-in `node:sqlite`, so there is no need to install a SQLite service or compile a native database extension. MathLive and KaTeX are installed via npm and served locally; the browser never hits a CDN at runtime. It runs on common AMD64 and ARM64 Linux hosts, and has been verified to run on ARM development boards.
 
-## 本机运行
+## Running locally
 
 ```bash
-git clone <你的仓库地址> nonprofit-video-mvp
-cd nonprofit-video-mvp
+git clone https://github.com/Jason-ztsj/Synopt.git synopt
+cd synopt
 cp .env.example .env
 npm ci
 node --env-file=.env src/index.js
 ```
 
-另开一个终端启动独立验证器：
+In another terminal, start the standalone validator:
 
 ```bash
-cd nonprofit-video-mvp
+cd synopt
 node --env-file=.env src/validator-worker.js
 ```
 
-打开 `http://127.0.0.1:3000`。应用进程会监听 `0.0.0.0`，这是为了方便无显示器开发板通过局域网调试；本机仍可用回环地址访问。应用启动时会创建数据目录并执行向后兼容的数据库迁移，不会删除既有视频或讨论。
+Open `http://127.0.0.1:3000`. The app process listens on `0.0.0.0`, which is convenient for debugging over the LAN (e.g., on a machine without a display); localhost still works. On startup the app creates the data directory and runs backward-compatible database migrations, and never deletes existing videos or discussions.
 
-Node 的 `--env-file` 参数负责读取 `.env`；如果完全使用默认值，也可分别运行 `npm start` 和 `npm run validator`。Web 应用与验证器必须同时运行，否则新上传会安全地停留在 `pending`，不会被误公开。所有配置都会在启动时校验，非法值会令进程立即退出并给出错误。
+Node’s `--env-file` flag reads `.env`; if you fully use defaults, you can also just run `npm start` and `npm run validator`. The web app and the validator must run together, otherwise new uploads safely stay in `pending` and are never accidentally published. All config is validated at startup; an invalid value immediately exits the process with an error.
 
-## 启用 CMS 与首位管理员
+## Enabling CMS and the first administrator
 
-CMS 路由随应用默认存在，不使用容易误配的开关；普通成员没有后台权限。先通过公开注册流程创建目标账号，再由能够访问服务器和数据库的运维人员明确授予首位管理员：
+The CMS routes exist by default (no error-prone toggle); ordinary members have no backend permission. First create the target account through the public registration flow, then have an operator with access to the server and database explicitly grant the first administrator:
 
 ```bash
 npm run admin:grant -- <username>
 ```
 
-命令必须在与应用相同的 `DATABASE_PATH` 环境下运行，不会创建账号，也不会从环境变量自动指定某个用户为管理员。Compose 部署可在正在运行的应用容器内执行：
+The command must run with the same `DATABASE_PATH` as the app; it does not create accounts and does not auto-promote any user from an environment variable. For a Compose deployment you can run it inside the running app container:
 
 ```bash
 docker compose exec app npm run admin:grant -- <username>
 ```
 
-CLI 经过同一治理服务；实际授予角色时按 `system-cli` 身份写审核动作、审计和系统通知，对已是管理员的账号重复执行则直接返回。后续角色变化在 CMS 的账号页完成，并受“不能自我降级、不能降级、暂停或注销最后一名有效管理员”等约束。
+The CLI goes through the same governance service: when actually granting a role it writes the moderation action, audit, and system notification under the `system-cli` identity, and re-running it on an already-admin account returns immediately. Later role changes happen in the CMS account page and are bounded by constraints such as “cannot self-demote” and “cannot demote, suspend, or delete the last active administrator.”
 
-管理员或审核员使用普通账号登录后访问 `/cms`，还必须再次输入当前密码。再认证只作用于属于当前工作人员的当前会话，默认有效 30 分钟；尝试同时按工作人员账号和来源 IP 使用 `AUTH_COOLDOWN_SECONDS` 冷却。角色被撤销或账号被暂停后，旧 Cookie 和尚未过期的再认证都不会保留后台权限。
+After signing in with a normal account, an administrator or moderator visits `/cms` and must re-enter the current password. Re-authentication only applies to the current session of the current staff member and is valid for 30 minutes by default; attempts are bounded by an `AUTH_COOLDOWN_SECONDS` cooldown keyed by both the staff account and the source IP. After a role is revoked or an account suspended, old cookies and unexpired re-authentication no longer confer backend access.
 
-工作人员同时也是普通成员，因此 CMS 固定按治理目标隔离本人利益冲突：本人创作的内容、本人视频所承载的讨论、本人申诉、本人账号，以及工作人员曾举报的视频或讨论都不能由其读取或处理；举报过某位作者内容的管理员也不能进入或治理该作者账号。案件、内容、账号、申诉、工作台近期动作和管理员审计都会应用同一边界，筛选条件不能绕过；讨论上下文只保留树结构，冲突节点会遮蔽正文、作者、状态和链接。私密媒体读取还会逐次复核授权人未举报目标。底层审计仍完整追加，该查看边界避免从内部操作者字段反推出受保护身份或证据。
+Staff members are also ordinary members, so the CMS always isolates conflicts of interest by governance target: content the staff member created, discussions carried by their videos, their own appeals, their own account, and videos/discussions they have reported cannot be read or processed by them; an administrator who reported one author’s content cannot enter or moderate that author’s account. This same boundary applies to cases, content, accounts, appeals, recent workbench actions, and the administrator audit; filters cannot bypass it. Discussion context keeps only the tree structure, and conflicting nodes mask body, author, status, and links. Private-media reads also re-check each time that the grantor has not reported the target. The underlying audit remains fully append-only; this viewing boundary avoids inferring a protected identity or evidence from internal operator fields.
 
-运行测试：
+Run the tests:
 
 ```bash
 npm test
 ```
 
-也可分别运行：
+Or separately:
 
 ```bash
 npm run test:unit
 npm run test:integration
 ```
 
-测试覆盖配置与输入边界、密码和安全令牌、头像/封面真实解码与去元数据、图片并发闸门、数据库迁移、持久删除队列、许可证规范化、Markdown/XSS、客户端 IP、冷却窗口、媒体状态机和真实 FFmpeg 验证，以及真实 HTTP 账号资料、内容撤回/删除、讨论墓碑、通知、注销、MP4/WebM 上传、伪文件头拒绝、Range 和讨论流程。CMS 测试另外覆盖 v4→v5 迁移、固定权限、再认证、目标级举报人隔离、举报案件、内容与账号状态 CAS、申诉、审计、标签合并、验证 ABA 重试和短时私密媒体授权。图片与媒体相关测试会调用本机的 `ffmpeg`，媒体测试还会调用 `ffprobe`。
+Tests cover config and input boundaries, passwords and security tokens, real avatar/cover decoding and metadata stripping, the image concurrency gate, database migrations, the persistent-deletion queue, license normalization, Markdown/XSS, client IP, cooldown windows, the media state machine and real FFmpeg validation, and real HTTP account/profile, content withdrawal/deletion, discussion tombstones, notifications, sign-out, MP4/WebM upload, fake-header rejection, Range, and discussion flows. CMS tests additionally cover the migrations, fixed permissions, re-authentication, target-level reporter isolation, report cases, content and account status CAS, appeals, audit, tag merging, validation ABA retries, and short-lived private-media authorization. Image and media tests call the host’s `ffmpeg`, and media tests also call `ffprobe`.
 
-[`docs/qa/README.md`](docs/qa/README.md) 中的截图和记录是账号功能加入前的历史 MVP 基线，不能替代当前版本的复验。
+The screenshots and notes in [`docs/qa/README.md`](docs/qa/README.md) are a historical MVP baseline from before account features and are not a substitute for re-verifying the current version.
 
-媒体接入状态机、错误分类和中断恢复细节见 [`docs/media-pipeline.md`](docs/media-pipeline.md)。
-平台信息架构、横屏长视频约束、透明排序以及 CMS 数据边界见 [`docs/platform-architecture.md`](docs/platform-architecture.md)。
-CMS 的权限、状态机、事务和隐私边界见 [`docs/cms-technical-design.md`](docs/cms-technical-design.md)；第一次接触治理系统可从 [`docs/cms-learning-guide.md`](docs/cms-learning-guide.md) 开始。
+The media ingestion state machine, error classification, and interruption recovery are in [`docs/media-pipeline.md`](docs/media-pipeline.md).
+Platform information architecture, landscape long-form video constraints, transparent ranking, and CMS data boundaries are in [`docs/platform-architecture.md`](docs/platform-architecture.md).
+CMS permissions, state machines, transactions, and privacy boundaries are in [`docs/cms-technical-design.md`](docs/cms-technical-design.md); to first encounter the governance system, start at [`docs/cms-learning-guide.md`](docs/cms-learning-guide.md).
 
-## 配置
+## Configuration
 
-| 变量 | 默认值 | 含义 |
+| Variable | Default | Meaning |
 | --- | --- | --- |
-| `PORT` | `3000` | HTTP 监听端口，必须是 1–65535 的整数。 |
-| `HOST_BIND_ADDRESS` | `127.0.0.1` | 仅供 Compose 使用的宿主机发布地址；不改变 Node 进程在容器内的监听地址。 |
-| `DATABASE_PATH` | `./data/gongying.sqlite` | SQLite 数据库路径；旧文件名为兼容既有 MVP 数据而保留。 |
-| `VIDEO_STORAGE_PATH` | `./data/videos` | 已验证视频及同文件系统上传临时文件的存储目录。 |
-| `MAX_UPLOAD_MB` | `1024` | 单个视频上传上限，单位 MiB，必须为正数。 |
-| `MEDIA_UPLOAD_CHUNK_MB` | `16` | 分片上传单片大小，单位 MiB。大文件（客户端阈值约 50 MiB）自动分片，小文件保持一次性上传。 |
-| `MAX_VIDEO_DURATION_SECONDS` | `7200` | 服务端接受的最长媒体时长。 |
-| `MAX_VIDEO_WIDTH` / `MAX_VIDEO_HEIGHT` | `4096` | 单边画面尺寸上限。 |
-| `MAX_VIDEO_PIXELS` | `8847360` | 总像素上限；默认约为 4096×2160。 |
-| `MAX_VIDEO_FPS` | `120` | 视频帧率上限。 |
-| `MEDIA_DECODE_ERROR_RATE` | `0.001` | 完整解码允许的基础错误比例；另有短片最小容忍数和总错误绝对上限。 |
-| `MEDIA_VALIDATION_POLL_MS` | `1000` | 验证器空闲时轮询待处理任务的间隔。 |
-| `MEDIA_VALIDATION_STALE_MINUTES` | `30` | `validating` 任务的失联判定时间；活跃 worker 会周期续租，重领后旧 worker 的结果会被 CAS 拒绝。 |
-| `MEDIA_VALIDATION_THREADS` | `2` | 单个 FFmpeg 验证任务使用的线程数。 |
-| `FFPROBE_PATH` / `FFMPEG_PATH` | `ffprobe` / `ffmpeg` | 宿主机运行时的命令或绝对路径；Web 图片规范化使用 FFmpeg，媒体验证器使用两者。 |
-| `IMAGE_NORMALIZATION_CONCURRENCY` | `2` | Web 进程同时规范化头像/封面的全局上限，最大 8。 |
-| `IMAGE_NORMALIZATION_COOLDOWN_SECONDS` | `10` | 同一账号或来源 IP 两次图片规范化之间的最短秒数。 |
-| `APP_CPUS` / `APP_MEMORY_LIMIT` / `APP_PIDS_LIMIT` | `2.0` / `1024m` / `96` | Compose Web 服务及其图片解码子进程的资源上限。 |
-| `VALIDATOR_CPUS` | `2.0` | Compose 验证服务 CPU 上限。 |
-| `VALIDATOR_MEMORY_LIMIT` | `1536m` | Compose 验证服务内存与交换上限。 |
-| `VALIDATOR_PIDS_LIMIT` | `64` | Compose 验证服务 PID 上限。 |
-| `DISCUSSION_COOLDOWN_SECONDS` | `30` | 同一账号或来源 IP 两次讨论之间的最短秒数。 |
-| `AUTH_COOLDOWN_SECONDS` | `2` | 注册和登录按来源 IP 计算的冷却秒数；CMS 密码再认证复用该值并同时按工作人员账号和来源 IP 计算。最大 3600。 |
-| `SESSION_TTL_HOURS` | `168` | 登录会话有效期，最大 8760 小时。 |
-| `CMS_REAUTH_MINUTES` | `30` | 当前会话完成 CMS 密码再认证后的有效分钟数，最大 1440。 |
-| `CMS_PRIVATE_MEDIA_GRANT_MINUTES` | `15` | 与后台会话、案件和视频绑定的私密媒体授权有效分钟数，最大 1440。 |
-| `REPORT_COOLDOWN_SECONDS` | `30` | 同一账号或来源 IP 连续提交举报的最短秒数，最大 86400；状态保存在单进程内存。 |
-| `APPEAL_WINDOW_DAYS` | `30` | 受影响成员在可申诉动作后可提交申诉的天数，最大 3650；同一窗口也用于阻止作者提前编辑或删除尚需保留的讨论证据，以及删除视频证据。 |
-| `SESSION_COOKIE_SECURE` | `false` | 是否为会话和 CSRF Cookie 添加 `Secure`；仅通过 HTTPS 访问时应设为 `true`。 |
-| `CLIENT_IP_MODE` | `direct` | `direct` 或 `cloudflare`，决定限流使用的客户端地址来源。 |
+| `PORT` | `3000` | HTTP listen port; must be an integer 1–65535. |
+| `HOST_BIND_ADDRESS` | `127.0.0.1` | Host publish address for Compose only; does not change the Node process’s listen address inside the container. |
+| `DATABASE_PATH` | `./data/synopt.sqlite` | SQLite database path. |
+| `VIDEO_STORAGE_PATH` | `./data/videos` | Directory for validated videos and same-filesystem upload temp files. |
+| `MAX_UPLOAD_MB` | `1024` | Per-video upload cap, in MiB; must be positive. |
+| `MEDIA_UPLOAD_CHUNK_MB` | `16` | Chunk size for chunked upload, in MiB. Larger files (client threshold ~50 MiB) auto-chunk; smaller files upload in a single request. |
+| `MAX_VIDEO_DURATION_SECONDS` | `7200` | Longest media duration accepted by the server. |
+| `MAX_VIDEO_WIDTH` / `MAX_VIDEO_HEIGHT` | `4096` | Per-side dimension limit. |
+| `MAX_VIDEO_PIXELS` | `8847360` | Total pixel cap; default ~4096×2160. |
+| `MAX_VIDEO_FPS` | `120` | Frame-rate cap. |
+| `MEDIA_DECODE_ERROR_RATE` | `0.001` | Base error ratio allowed during full decode; there are also a minimum tolerance for short clips and an absolute error ceiling. |
+| `MEDIA_VALIDATION_POLL_MS` | `1000` | Interval the validator polls pending tasks while idle. |
+| `MEDIA_VALIDATION_STALE_MINUTES` | `30` | Liveness threshold for `validating` tasks; active workers renew the lease, and after a re-claim an old worker’s result is rejected by CAS. |
+| `MEDIA_VALIDATION_THREADS` | `2` | Threads used by a single FFmpeg validation task. |
+| `FFPROBE_PATH` / `FFMPEG_PATH` | `ffprobe` / `ffmpeg` | Commands or absolute paths on the host; the web app uses FFmpeg for image normalization, the validator uses both. |
+| `IMAGE_NORMALIZATION_CONCURRENCY` | `2` | Global cap for the web process normalizing avatars/covers concurrently; max 8. |
+| `IMAGE_NORMALIZATION_COOLDOWN_SECONDS` | `10` | Minimum seconds between two image normalizations for the same account or source IP. |
+| `APP_CPUS` / `APP_MEMORY_LIMIT` / `APP_PIDS_LIMIT` | `2.0` / `1024m` / `96` | Resource caps for the Compose web service and its image-decode subprocesses. |
+| `VALIDATOR_CPUS` | `2.0` | CPU cap for the Compose validator. |
+| `VALIDATOR_MEMORY_LIMIT` | `1536m` | Memory/swap cap for the Compose validator. |
+| `VALIDATOR_PIDS_LIMIT` | `64` | PID cap for the Compose validator. |
+| `DISCUSSION_COOLDOWN_SECONDS` | `30` | Minimum seconds between two discussions for the same account or source IP. |
+| `AUTH_COOLDOWN_SECONDS` | `2` | Cooldown seconds for registration/sign-in keyed by source IP; CMS password re-auth reuses it and counts both staff account and source IP. Max 3600. |
+| `SESSION_TTL_HOURS` | `168` | Sign-in session lifetime; max 8760 hours. |
+| `CMS_REAUTH_MINUTES` | `30` | Minutes a CMS password re-auth stays valid for the current session; max 1440. |
+| `CMS_PRIVATE_MEDIA_GRANT_MINUTES` | `15` | Minutes a private-media grant bound to a backend session, case, and video stays valid; max 1440. |
+| `REPORT_COOLDOWN_SECONDS` | `30` | Minimum seconds between consecutive reports for the same account or source IP; max 86400; state is in single-process memory. |
+| `APPEAL_WINDOW_DAYS` | `30` | Days after an appealable action during which an affected member can appeal; max 3650. The same window also blocks authors from editing/deleting discussion evidence or deleting video evidence early. |
+| `SESSION_COOKIE_SECURE` | `false` | Whether to add `Secure` to the session and CSRF cookies; set to `true` only over HTTPS. |
+| `CLIENT_IP_MODE` | `direct` | `direct` or `cloudflare` — the source used for rate limiting. |
 
-通过 `node --env-file=.env` 启动时，已有进程环境变量优先于 `.env` 中的同名值；Compose 也会读取项目根目录的 `.env`。不要提交 `.env`、数据库或视频文件。
+When started via `node --env-file=.env`, process environment variables take precedence over same-named values in `.env`; Compose also reads the `.env` in the project root. Do not commit `.env`, the database, or video files.
 
-## Docker Compose（含 ARM64）
+## Docker Compose
 
-先复制配置并创建宿主数据目录。容器以非 root 的 `node` 用户（UID/GID 1000）运行，因此数据目录必须可由该用户写入：
+First copy the config and create the host data directory. Containers run as the non-root `node` user (UID/GID 1000), so the data directory must be writable by it:
 
 ```bash
 cp .env.example .env
@@ -161,48 +167,48 @@ docker compose up -d
 docker compose ps
 ```
 
-Compose 会启动 `app` 与 `validator` 两个服务。两个镜像都包含 FFmpeg：Web 服务只用它真实解码并规范化小型用户图片，独立验证器处理视频。两者均使用只读根文件系统、移除 Linux capabilities并限制 CPU、内存和 PID；验证器还完全关闭网络。它们通过共享的 `./data` 与 SQLite 状态协作。
+Compose starts two services, `app` and `validator`. Both images include FFmpeg: the web service uses it only to actually decode and normalize small user images; the standalone validator handles videos. Both use a read-only root filesystem, drop Linux capabilities, and cap CPU, memory, and PIDs; the validator also has networking fully disabled. They cooperate through the shared `./data` and SQLite state.
 
-用户图片目前仍在 Web 请求内同步调用原生解码器；协议白名单、单帧、超时、单进程线程、按账号/IP 冷却、全局并发闸门与容器资源上限共同约束这个风险。若进入实际运营，应像视频一样把图片规范化迁到无网络、最小权限的独立 worker，而不把当前 MVP 当作最终隔离边界。
+User images are currently still normalized synchronously inside the web request with a native decoder; a protocol allowlist, single-frame, timeout, per-process thread, per-account/IP cooldown, global concurrency gate, and container resource caps together bound this risk. For real operation you should move image normalization to a no-network, least-privilege worker like videos, and not treat the current MVP as the final isolation boundary.
 
-服务默认只发布在 `127.0.0.1:${PORT}`。Compose 将 `./data` 挂载到 `/app/data`，数据库、账号和视频不随容器重建而消失。如果主机上的 UID/GID 不是 1000，或出现 `EACCES`，请将 `data` 的所有者调整为容器用户：
+By default the service is published only on `127.0.0.1:${PORT}`. Compose mounts `./data` to `/app/data`, so the database, accounts, and videos survive container recreation. If the host’s UID/GID is not 1000, or you hit `EACCES`, adjust the `data` owner to the container user:
 
 ```bash
 sudo chown -R 1000:1000 data
 ```
 
-查看日志或停止服务：
+View logs or stop the service:
 
 ```bash
 docker compose logs -f app validator
 docker compose down
 ```
 
-`docker compose down` 不会删除 `./data`。镜像基于多架构 `node:24-bookworm-slim`；在 ARM64 主机上直接构建即可。若要在另一台机器显式构建 ARM64 镜像：
+`docker compose down` does not delete `./data`. The image is based on multi-arch `node:24-bookworm-slim`, so it builds directly on AMD64 or ARM64 hosts (and has been verified on ARM development boards). To explicitly build an ARM64 image on another machine:
 
 ```bash
-docker buildx build --platform linux/arm64 -t tongjian-video-mvp:arm64 --load .
+docker buildx build --platform linux/arm64 -t synopt-video-mvp:arm64 --load .
 ```
 
-这里的 `tongjian-video-mvp` 只是本地镜像标签，并非正式英文产品名。`app` 镜像与 Compose 服务使用 `/healthz` 健康检查；Web 服务健康后该接口返回 HTTP 200，validator 通过退出码和日志反映状态。
+Here `synopt-video-mvp` is just a local image tag, not a formal English product name. The `app` image and Compose service use a `/healthz` health check; the web service returns HTTP 200 when healthy, and the validator reflects status via exit code and logs.
 
-## 局域网开发板调试
+## LAN / host debugging
 
-直接运行 Node 时，应用已经监听 `0.0.0.0`。在开发板上启动后，同一局域网的其他设备可打开 `http://<开发板局域网地址>:3000`。
+When running Node directly, the app already listens on `0.0.0.0`. After starting on the machine, other devices on the same LAN can open `http://<host-lan-ip>:3000`.
 
-使用 Compose 时，`HOST_BIND_ADDRESS` 决定宿主机在哪些地址发布端口。可先用下面的命令找到开发板地址：
+With Compose, `HOST_BIND_ADDRESS` decides which addresses the host publishes the port on. You can find the machine’s address first:
 
 ```bash
 ip -brief -4 address show scope global
 ```
 
-然后选择其一写入 `.env` 并重建容器：
+Then choose one and write it into `.env` and rebuild the container:
 
 ```dotenv
-# 只发布到一个明确的 LAN 地址
+# publish only to one explicit LAN address
 HOST_BIND_ADDRESS=192.168.10.24
 
-# 或为了无显示器设备的临时调试，发布到所有网卡
+# or, for temporary headless debugging, publish to all interfaces
 HOST_BIND_ADDRESS=0.0.0.0
 ```
 
@@ -210,11 +216,11 @@ HOST_BIND_ADDRESS=0.0.0.0
 docker compose up -d --force-recreate
 ```
 
-`0.0.0.0` 是有意支持的开发调试配置，但它也会覆盖 VPN、隧道等其他网卡。只应在可信局域网内使用，配合防火墙将 TCP 3000 限制在本地子网，并且不要做公网端口转发。它不等于公网生产部署方案。
+`0.0.0.0` is an intentionally supported dev/debug config, but it also reaches VPN, tunnel, and other interfaces. Only use it on a trusted LAN, with a firewall limiting TCP 3000 to the local subnet, and never do public port forwarding. It is not a public production deployment.
 
-## Cloudflare Tunnel（仅供后续实验）
+## Cloudflare Tunnel (experimental only)
 
-如果以后通过 Cloudflare Tunnel 试验 HTTPS 访问，推荐让宿主端口继续绑定 `127.0.0.1`，由同机的 `cloudflared` 连接 `http://localhost:3000`。确认源站不能被绕过后，设置：
+If you later trial HTTPS through Cloudflare Tunnel, it’s recommended to keep the host port bound to `127.0.0.1` and have a same-machine `cloudflared` connect to `http://localhost:3000`. After confirming the origin cannot be bypassed, set:
 
 ```dotenv
 HOST_BIND_ADDRESS=127.0.0.1
@@ -222,39 +228,39 @@ CLIENT_IP_MODE=cloudflare
 SESSION_COOKIE_SECURE=true
 ```
 
-两种 IP 模式的信任边界：
+Trust boundaries of the two IP modes:
 
-- `direct` 只使用 TCP 连接地址并忽略代理头，适合局域网直接访问。
-- `cloudflare` 会读取合法的单值 `CF-Connecting-IP`，缺失或非法时回退到连接地址。直接访问者可以伪造这个请求头，因此启用该模式时必须让源站只能经受信 Tunnel 到达。
+- `direct` uses only the TCP peer address and ignores proxy headers — suitable for direct LAN access.
+- `cloudflare` reads a valid single-value `CF-Connecting-IP`, falling back to the peer address when missing/invalid. Direct accessors can forge this header, so in this mode the origin must be reachable only through a trusted Tunnel.
 
-隧道或反向代理可能另有请求体限制（Cloudflare 常有约 100 MB 的单请求上限）。客户端会按约 50 MiB 阈值自动选择：更大的规范化文件走分片上传（单片默认 16 MiB，`MEDIA_UPLOAD_CHUNK_MB` 可调），小文件保持一次性 `multipart/form-data`。`MAX_UPLOAD_MB` 已为 multipart 开销预留空间；试验前仍应核对当时所用入口服务和套餐的限制。
+Tunnels and reverse proxies may impose their own request-body limits (Cloudflare often ~100 MB per request). The client auto-selects by a ~50 MiB threshold: larger normalized files use chunked upload (default 16 MiB per chunk, `MEDIA_UPLOAD_CHUNK_MB` adjustable), smaller files stay a single `multipart/form-data`. `MAX_UPLOAD_MB` already leaves room for multipart overhead; still verify the limits of the entry service and plan in use before experimenting.
 
-## 视频兼容性与验证
+## Video compatibility and validation
 
-浏览器可读取 MP4/M4V、MOV、MKV 和 WebM 输入，首期只接受恰好一条视频轨、至多一条音频轨，不保留字幕、附件或数据轨。规范资产矩阵如下：
+The browser can read MP4/M4V, MOV, MKV, and WebM input; the first release accepts exactly one video track and at most one audio track, and does not keep subtitles, attachments, or data tracks. The normalized asset matrix:
 
-| 视频 | 音频 | 服务端存储 | 当前播放策略 |
+| Video | Audio | Server storage | Current playback |
 | --- | --- | --- | --- |
-| H.264 | AAC 或无音频 | MP4 | 浏览器原生（保证级） |
-| H.264 | MP3 / Opus / FLAC | MP4 | 浏览器原生（有限兼容，部分浏览器可能无法播放） |
-| VP8 | Opus 或无音频 | WebM | 浏览器原生（保证级） |
-| VP9 | Opus 或无音频 | WebM | 浏览器原生（保证级） |
-| AV1 | Opus 或无音频 | WebM | 浏览器原生（保证级） |
-| HEVC | AAC 或无音频 | MP4 | 实验性，仅依赖设备原生 HEVC |
+| H.264 | AAC or no audio | MP4 | Native browser (guaranteed) |
+| H.264 | MP3 / Opus / FLAC | MP4 | Native browser (limited — some browsers may fail) |
+| VP8 | Opus or no audio | WebM | Native browser (guaranteed) |
+| VP9 | Opus or no audio | WebM | Native browser (guaranteed) |
+| AV1 | Opus or no audio | WebM | Native browser (guaranteed) |
+| HEVC | AAC or no audio | MP4 | Experimental, depends on device HEVC |
 
-可无损重封装进目标容器、但从规范或生态角度并非所有浏览器都能原生播放的组合（如 H.264 + MP3 音频、MP4 里的 Opus/FLAC、HEVC）会标记为「有限兼容」，上传端提示兼容度偏低，同时播放器向观看者显示提示。明确无法被现代浏览器原生播放的组合（如 MPEG-4 Part 2、AC-3、DTS、ALAC 等）仍会被拒绝，并附转码建议，而不是降级发布。
+Combinations that can be losslessly re-muxed into the target container but are not natively playable in every browser for standardization/ecosystem reasons (e.g., H.264 + MP3 audio, Opus/FLAC in MP4, HEVC) are flagged “limited compatibility”: the uploader sees a low-compatibility hint, and the player shows a notice. Combinations browsers clearly cannot play natively (e.g., MPEG-4 Part 2, AC-3, DTS, ALAC) are still rejected, with a transcode suggestion, rather than degraded-published.
 
-输入容器与目标不同才会重封装；压缩后的音视频 packet 会原样复制，因此速度通常接近文件读写速度，不会发生画质损失。首期明确不使用 ffmpeg.wasm 转码。旧编码、不兼容的音视频组合、多轨和无法可靠保留的旋转信息会在上传前给出处理建议。
+Re-muxing only happens when the input container differs; compressed audio/video packets are copied verbatim, so speed is usually near file read/write and there is no quality loss. The first release explicitly does not use ffmpeg.wasm transcoding. Legacy codecs, incompatible audio/video combos, multi-track files, and rotation information that cannot be preserved reliably get processing advice before upload.
 
-浏览器检查只是体验层。服务端先检查规范资产的 MP4/WebM 签名，再写入 `.pending`；独立验证器重新确认真实容器和编码、遍历数据包、检查时长/分辨率/帧率与 MP4 顶层结构、计算 SHA-256，并分别完整解码视频与音频。验证任务在长时间解码期间周期续租，完成、拒绝、失败和自动封面写入都必须匹配最新租约版本；任务被其他 worker 重领后，旧 worker 不能再提交状态或排队删除文件。小比例可恢复错误会得到 `ready_with_warnings`，超过动态阈值、结构越界、截断、空轨、未知编码或解码不完整会得到 `rejected`；FFmpeg 缺失、超时、OOM 等基础设施故障记为可重试的 `validation_failed`，不会伪装成“用户文件损坏”。
+The browser check is only a UX layer. The server first checks the MP4/WebM signature of the normalized asset, then writes to `.pending`; the standalone validator re-confirms the real container and codecs, walks packets, checks duration/resolution/frame-rate and the MP4 top-level structure, computes SHA-256, and fully decodes video and audio separately. During long decode tasks the lease is renewed periodically; completion, rejection, failure, and automatic cover write must all match the latest lease version. After a task is re-claimed by another worker, the old worker can no longer submit state or queue a file deletion. Small recoverable error ratios get `ready_with_warnings`; exceeding a dynamic threshold, structural overruns, truncation, empty tracks, unknown codecs, or incomplete decode get `rejected`; infrastructure failures such as missing FFmpeg, timeout, or OOM are recorded as retryable `validation_failed`, never masked as “user file corrupted.”
 
-当前 HEVC 还没有 hevc.js/WebCodecs 回退；这类回退需要另一套分段媒体和 HTTPS 能力设计。局域网 HTTP 不影响本期纯 demux/remux，但不支持 HEVC 的浏览器仍无法播放 HEVC。浏览器在当前测试上限 1024 MiB 内会同时持有源文件和重封装结果，低内存移动设备仍可能失败；更大文件需要以后设计分块、可恢复上传。
+There is currently no HEVC fallback via hevc.js/WebCodecs; such a fallback would need a separate segmented-media and HTTPS design. LAN HTTP does not affect this release’s pure demux/remux, but browsers without HEVC still cannot play HEVC. Within the current 1024 MiB test limit the browser holds both the source and the re-muxed result, so low-memory mobile devices may still fail; larger files will require a chunked, resumable upload design later.
 
-## 备份、迁移与恢复
+## Backup, migration, and restore
 
-应用启动时自动执行向前迁移。schema v5 在保留 v4 数据的基础上增加治理版本、讨论审核状态、举报案件、审核动作、申诉、审计和短时媒体授权；旧讨论默认为 `visible`，治理版本从 0 开始。默认数据库仍叫 `gongying.sqlite`，只是兼容性文件名；不要为了改品牌手工改名后只迁走数据库而遗漏媒体文件。
+The app runs forward migrations automatically at startup. The current schema is v7. The migrations added, in order: v5 keeps v4 data and adds governance versions, discussion moderation status, report cases, moderation actions, appeals, audit, and short-lived media grants; v6 rebuilds the videos table for media-compatibility tiers (widened codec checks and a `compatibility` column); v7 rebuilds `video_votes` into a three-tier “value” rating (高/中/低 — high/medium/low, `value IN (1,2,3)`). Old discussions default to `visible`, governance versions start at 0. The default database is named `synopt.sqlite`; don’t try to rebrand by hand-renaming and migrating only the database while forgetting the media files.
 
-首次用新版本打开既有 v4 数据前，以及之后每次重要升级前，都应制作一致备份。最直接的方法是短暂停止应用与 validator 并复制整个 `data` 目录，以同时保留 SQLite 数据库、WAL/SHM 辅助文件（若存在）、账号、会话、治理记录和所有媒体：
+Before opening existing v4 data with a new version the first time, and before every later major upgrade, make a consistent backup. The most direct way is to briefly stop the app and validator and copy the whole `data` directory, which keeps the SQLite database, any WAL/SHM sidecar files, accounts, sessions, governance records, and all media together:
 
 ```bash
 docker compose stop app validator
@@ -262,15 +268,15 @@ tar -czf "tongjian-backup-$(date +%Y%m%d-%H%M%S).tar.gz" data
 docker compose start app validator
 ```
 
-升级后应检查 `/healthz`、后台登录、管理员数量、待处理案件和任务队列，并确认数据库版本与外键。项目运行不依赖 `sqlite3` 命令；若主机另行安装了该只读检查工具，可执行：
+After upgrading, check `/healthz`, backend login, administrator count, pending cases, and the task queue, and confirm the database version and foreign keys. Running the project does not depend on the `sqlite3` command; if you installed that read-only tool separately, you can run:
 
 ```bash
-sqlite3 data/gongying.sqlite 'PRAGMA user_version; PRAGMA foreign_key_check;'
+sqlite3 data/synopt.sqlite 'PRAGMA user_version; PRAGMA foreign_key_check;'
 ```
 
-第一条结果应为 `5`，`foreign_key_check` 不应返回任何行。不要在应用运行时复制单个 SQLite 主文件，也不要通过手工降低 `PRAGMA user_version` 回滚；旧程序无法理解 v5 表与状态。
+The first result should be `7`, and `foreign_key_check` should return no rows. Don’t copy a single SQLite main file while the app is running, and don’t roll back by hand-lowering `PRAGMA user_version`; old programs cannot understand the v7 tables and states.
 
-恢复到空目录时：
+To restore into an empty directory:
 
 ```bash
 docker compose down
@@ -280,50 +286,48 @@ sudo chown -R 1000:1000 data
 docker compose up -d
 ```
 
-恢复后先检查 `/healthz`，再抽查登录、视频播放与拖动、许可证、账号归属、讨论、工作人员角色、案件和审计。备份中的服务端会话记录及短时 CMS 授权可能仍有效，浏览器还需要原会话 Cookie；无法确认信任边界时，应将会话和备份视为敏感数据。确认恢复无误前保留 `data.before-restore`。
+After restoring, first check `/healthz`, then spot-check login, video playback and seeking, licenses, account ownership, discussions, staff roles, cases, and audit. Backed-up server-side session records and short-lived CMS grants may still be valid; the browser also needs the original session cookie. If you cannot confirm the trust boundary, treat sessions and backups as sensitive. Keep `data.before-restore` until you’ve confirmed the restore.
 
-## 当前版本验收清单
+## Current-version acceptance checklist
 
-自动测试通过后，建议至少人工检查：
+After automated tests pass, at least manually verify:
 
-1. 未登录时可以浏览和播放，访问 `/upload` 会转到登录页。
-2. 注册后立即成为登录状态；刷新页面后会话仍有效，用户名大小写不能重复注册。
-3. 登录用户可以选择 MP4/MOV/MKV/WebM；页面显示探测到的编码与“直接上传/无损重封装”计划。
-4. 上传后先看到验证状态；验证前匿名用户看不到详情，媒体地址和讨论接口也不可用；通过后页面自动显示播放器并进入首页。
-5. H.264/AAC MP4 与 VP9/Opus WebM 均可播放、拖动进度并返回正确 MIME；伪造文件头后接垃圾会被拒绝；未上传封面时会生成第一帧封面。
-6. 上传的封面必须满足严格尺寸、比例、类型和文件头要求；首页与播放器保持 16:9 横屏展示。
-7. 顶层讨论有标题且默认折叠，回复关系正确；公式键盘能插入行内与块级 LaTeX，结构化输入和实时预览均正常。
-8. 视频的三档"价值"评价与讨论/回复的认同/反对都可以切换和取消，同一账号不会产生重复票。
-9. 缺失或错误 CSRF 令牌的写请求被拒绝；讨论冷却同时作用于账号和来源 IP。
-10. 账号菜单可用键盘和 Esc 操作；个人资料、头像、密码、通知偏好和公开作者主页显示正确。
-11. 撤回后匿名用户不能通过详情、媒体或封面 URL 访问稿件；重新发布后恢复；永久删除必须先撤回且保留匿名讨论档案。
-12. 讨论修改次数与时间正确；删除有回复的讨论不会删除子回复；通知按偏好生成并聚合，注销选项符合确认页说明。
-13. 退出后不能上传、投票或发布讨论，使用正确密码重新登录后恢复权限。
-14. 手机与桌面宽度均无页面级横向溢出，侧栏在手机上变为抽屉，长公式只在公式区域内滚动。
-15. 重启两个容器后，账号、头像、通知、封面、已验证视频、分类标签、投票和讨论仍存在；中断任务会安全恢复，完整媒体、`HEAD` 和单段 Range 响应正常。
-16. 普通成员无法进入任何 `/cms` 页面；审核员和管理员必须重新输入密码，窗口过期或角色被撤销后立即失去后台权限。
-17. 成员不能举报自己的内容或不可见对象；同一目标不能重复创建未结案件，连续举报受到冷却限制，本人举报页不显示内部备注或工作人员身份。
-18. 两名工作人员并发认领同一对象时，旧版本提交返回 409；未认领者和转交后的旧负责人不能追加备注、审核目标、读取授权媒体或结案。备注也携带案件版本，与转交、结案或另一条备注并发时不会越过 CAS；工作人员无法为自己的内容建立主动调查、认领或处理案件，曾举报同一目标者也不能借另一案件处理它。视频和讨论的隐藏、移除、恢复保留技术验证、作者撤回与讨论树语义，而“无违规”结案前目标必须已恢复 `visible`。
-19. 管理员不能暂停或降级自己，也不能暂停、降级或通过自助注销删除最后一名有效管理员；存在另一名有效管理员后注销才允许继续。暂停账号的旧会话立即撤销，重新登录后只能执行公开浏览、查看决定、申诉、修改密码和退出。
-20. 私密或不公开视频在 CMS 列表只显示占位；案件内授权携带案件 `expectedVersion`，且只作用于当前负责人的当前会话、`in_review` 案件和目标视频，转交或结案会删除旧授权；过期、案件版本冲突、会话/角色失效、目标不匹配或授权人曾举报目标后，CMS 专用媒体路由及 Range 均不能继续访问，封面一直保持占位。
-21. 每个可申诉的隐藏、移除或账号暂停动作最多提交一次期限内申诉；`pending` 申诉要先由非原操作者优先认领，且只有当前复核人能从 `in_review` 提交结果。申诉人、同目标举报人和举报过账号目标作者内容的管理员不能复核；转交后只有新复核人能继续。已有后续治理动作时撤销不会覆盖新状态，而是留在 `in_review`；当前复核人必须以申诉/目标双重 CAS 选择恢复原状态或保留当前后续状态。作者在未结案件/申诉或 `APPEAL_WINDOW_DAYS` 证据保留窗口内不能删除相关视频，也不能编辑或删除相关讨论。
-22. 任务重试只把失败验证重置为 `pending` 或提前已有删除任务；验证重试同时比较页面读取的验证开始/完成双时间戳，旧页面不能在“重试—再次失败”的 ABA 后覆盖新失败。CMS 不会写入 `ready` 或直接删除视频文件；审核员可查看验证失败视频的必要内容摘要，对删除队列则只看到匿名失败数量。`/cms/tasks`、完整任务明细和重试仅限管理员；后台全部写操作都写入只追加审计。
-23. 工作人员不能打开本人内容、本人申诉、本人账号或曾由其举报的目标；举报过某作者内容的管理员也不能治理该作者账号。案件、内容、账号、申诉、工作台和审计统一隔离这些对象，讨论冲突节点只保留树结构，筛选不能绕过，也不能借内部事件反推举报人。
+1. Browsing and playback work unsigned-in; visiting `/upload` redirects to sign-in.
+2. Registering immediately signs you in; the session survives a refresh, and case-sensitive duplicate usernames cannot register.
+3. Signed-in users can choose MP4/MOV/MKV/WebM; the page shows the detected codecs and the “direct upload / lossless re-mux” plan.
+4. After upload you first see the validation status; before validation the anonymous user cannot see details, and the media URL and discussion endpoints are unavailable; after passing, the page auto-shows the player and it enters the home feed.
+5. H.264/AAC MP4 and VP9/Opus WebM play, seek, and return correct MIME; a fake header followed by garbage is rejected; without a cover, a first-frame cover is generated.
+6. A custom cover must meet strict size, ratio, type, and header requirements; the home page and player keep a 16:9 landscape layout.
+7. Top-level discussions have a title and are collapsed by default, with correct reply relationships; the formula keyboard inserts inline and block LaTeX, and structured input and live preview work.
+8. A video’s three-tier “value” rating and discussions/replies’ approve/disapprove can both switch and cancel; the same account makes no duplicate vote.
+9. Write requests with a missing or wrong CSRF token are rejected; discussion cooldown applies to both account and source IP.
+10. The account menu is keyboard/Esc operable; profile, avatar, password, notification preferences, and the public author page render correctly.
+11. After withdrawal, anonymous users can’t access the work via detail, media, or cover URLs; re-publishing restores access; permanent deletion requires prior withdrawal and keeps an anonymous discussion archive.
+12. Discussion edit counts and times are correct; deleting a discussion with replies doesn’t delete sub-replies; notifications generate and aggregate by preference, and the sign-out option matches its confirmation page.
+13. After signing out you can’t upload, vote, or start discussions; re-signing in with the correct password restores permission.
+14. No page-level horizontal overflow at mobile and desktop widths; the sidebar becomes a drawer on mobile, and long formulas scroll only within the formula area.
+15. After restarting both containers, accounts, avatars, notifications, covers, validated videos, category tags, votes, and discussions remain; an interrupted task recovers safely, and full media, `HEAD`, and single-range Range responses work.
+16. Ordinary members can’t reach any `/cms` page; moderators and administrators must re-enter the password, and lose backend access immediately when the window expires or the role is revoked.
+17. Members can’t report their own content or invisible targets; the same target can’t get duplicate open cases, consecutive reports are cooldown-limited, and the member’s own report page doesn’t show internal notes or staff identity.
+18. When two staff members concurrently claim the same target, an old-version submission returns 409; unclaimed parties and a pre-transfer old owner can’t add notes, moderate the target, read authorized media, or close it. Notes also carry the case version and won’t cross a CAS with a transfer, closure, or another note; staff can’t open an active investigation, claim, or process a case on their own content; someone who reported the same target can’t process it via another case either. Video and discussion hide/remove/restore preserve technical validation, author withdrawal, and discussion-tree semantics, and a target must be restored to `visible` before a “no violation” closure.
+19. An administrator can’t suspend or demote themself, nor suspend, demote, or delete the last active administrator via self-deletion; self-deletion proceeds only once another active administrator exists. A suspended account’s old sessions are revoked immediately; after re-sign-in it can only browse public content, view decisions, appeal, change password, and sign out.
+20. Private/non-public videos show only a placeholder in the CMS list; an in-case grant carries the case `expectedVersion` and applies only to the current owner’s current session, an `in_review` case, and the target video; a transfer or closure deletes the old grant. After expiry, a case-version conflict, session/role invalidation, target mismatch, or the grantor having reported the target, the CMS-specific media route and Range can’t continue, and the cover stays a placeholder.
+21. Each appealable hide/remove/suspension action accepts at most one appeal within the window; a `pending` appeal is first claimed by someone other than the original actor, and only the current reviewer can submit a result from `in_review`. The appellant, a reporter of the same target, and an administrator who reported the target author’s content cannot review; after a transfer only the new reviewer can continue. When a later governance action exists, a revocation doesn’t overwrite the new state but stays in `in_review`; the current reviewer must CAS on both appeal and target to choose restoring the original state or keeping the current later state. The author can’t delete the related video, or edit/delete related discussions, while a case/appeal is open or within the `APPEAL_WINDOW_DAYS` evidence retention window.
+22. Task retries only reset a failed validation to `pending` or advance an existing deletion task; validation retries also compare the page-read validation start/finish twin timestamps, so an old page can’t overwrite a new failure after a “retry → fail again” ABA. CMS never writes `ready` or directly deletes a video file; moderators see an essential-content summary of a failed-validation video, and for the deletion queue only an anonymous failure count. `/cms/tasks`, full task detail, and retries are admin-only; every backend write goes to an append-only audit.
+23. Staff can’t open their own content, their own appeals, their own account, or targets they’ve reported; an administrator who reported one author’s content can’t moderate that author’s account. Cases, content, accounts, appeals, the workbench, and audit uniformly isolate these targets, conflicting discussion nodes keep only the tree structure, filters cannot bypass it, and you can’t infer a reporter from internal events.
 
-## 公网部署前须知
+## Before public deployment
 
-CMS V1 让举报、案件、审核决定、账号暂停、申诉和审计形成可追责的本地闭环，但这仍不足以使当前 MVP 适合实际运营。公开部署仍可能遭遇违法或侵权内容、垃圾账号、密码攻击、恶意文件、流量滥用和磁盘耗尽。当前也没有邮箱所有权验证、密码重置、账号恢复、多因素认证、存储配额、备份保留策略、专业法务流程、监控告警或事件响应体系。
+CMS V1 makes reports, cases, moderation decisions, account suspension, appeals, and audit form an accountable local loop, but it is still not enough to make the current MVP suitable for real operation. Public deployment can still face illegal/infringing content, spam accounts, password attacks, malicious files, traffic abuse, and disk exhaustion. There is also currently no email-ownership verification, password reset, account recovery, two-factor auth, storage quota, backup retention policy, professional legal process, monitoring/alerting, or incident-response system.
 
-如果未来决定运营，应在 CMS V1 之上继续建立入口层限流、TLS、监控告警、数据库与媒体备份保留、账号恢复、工作人员培训、内容政策与法律响应流程。FFmpeg 隔离仍应进一步升级为更严格的沙箱。不要把这份实验代码直接暴露到公网。
+If you decide to operate in the future, build on CMS V1 with entry-layer rate limiting, TLS, monitoring/alerting, database and media backup retention, account recovery, staff training, and content policy and legal response processes. FFmpeg isolation should be upgraded further to a stricter sandbox. Do not expose this experimental code directly to the public internet.
 
-## 许可证行为
+## License behavior
 
-上传页默认勾选“署名”。取消署名时，“非商业使用”和“禁止演绎”会同时清空并禁用，最终使用 CC0 1.0；后端会再次规范化，不能靠伪造表单绕过。CC0 视频仍记录并展示必填的创作者名称，但使用者无需署名。其余组合映射为对应的 CC 4.0 官方许可证，详情页会显示中文说明及官方 `rel="license"` 链接。
+The upload page defaults to checking “attribution”. When unchecking it, “non-commercial” and “no derivatives” are both cleared and disabled, and you end up with CC0 1.0; the backend re-normalizes, so you can’t bypass with a forged form. CC0 videos still record and show the required creator name, but users don’t need to attribute. Other combinations map to the corresponding CC 4.0 official licenses, and the detail page shows the Chinese description and the official `rel="license"` link.
 
-## 数据与隐私
+## Data and privacy
 
-SQLite 持久化用户名、显示名称、简介、头像引用、带盐密码摘要、会话/CSRF 令牌摘要、通知偏好与未读消息、视频元数据、验证状态/摘要/SHA-256，以及讨论的账号关联、显示名称快照、Markdown 原文和时间；视频、封面与头像二进制文件单独保存。schema v5 还保存举报和申诉理由、公开说明、内部案件备注、审核动作、必要的治理前后快照、只追加审计，以及绑定会话/案件/视频并带过期时间的私密媒体授权。审计不保存密码散列、Cookie、CSRF、完整媒体内容或无关个人资料。
+SQLite persists username, display name, bio, avatar reference, salted password digest, session/CSRF token digests, notification preferences and unread messages, video metadata, validation status/summary/SHA-256, and discussions’ account association, display-name snapshot, Markdown source, and timestamps; video, cover, and avatar binaries are stored separately. Schema v5 also stores report and appeal reasons, public explanations, internal case notes, moderation actions, necessary pre/post governance snapshots, append-only audit, and private-media grants bound to session/case/video with an expiry. The audit does not store password hashes, cookies, CSRF, full media content, or unrelated personal data.
 
-浏览器上报的源容器和编码只用于诊断，最终值来自服务端探测。应用只在内存中短暂使用客户端 IP 做注册、登录、CMS 密码再认证、讨论和举报冷却，不把 IP 写入数据库、审计或页面；举报与 CMS 再认证冷却都同时按登录账号和来源 IP 执行。举报人和工作人员身份、内部备注及敏感证据不会出现在公开占位或成员举报结果中；工作人员本人、本人申诉、本人账号、其曾举报的目标及相关作者账号会从相应 CMS 详情、工作台和审计视图中隔离，讨论冲突节点只保留树结构，避免从内部字段反推出受保护身份或证据。备份包含完整内部治理数据，应按敏感数据保护。
-
-应用不会索取邮箱或真实姓名。讨论正文最多 5,000 个字符。页面响应包含限制脚本、媒体和表单来源的 Content Security Policy，以及防止 MIME 嗅探、页面嵌入和敏感来源泄露的基础安全响应头。
+Browser-reported source containers and codecs are only diagnostic; the final values come from server probing. The app only briefly uses the client IP in memory for registration, sign-in, CMS password re-auth, discussion, and report cooldowns, never writing IPs to the database, audit, or pages; report and CMS re-auth cooldowns count both the signed-in account and the source IP. Reporter and staff identity, internal notes, and sensitive evidence never appear in public placeholders or member report results; the staff member themself, their own appeals, their own account, targets they’ve reported, and related author accounts are isolated from the corresponding CMS details, workbench, and audit views, and conflicting discussion nodes keep only the tree structure to avoid inferring a protected identity or evidence from internal fields. Backups contain full internal governance data and should be treated as sensitive.

@@ -136,7 +136,7 @@ async function startApplication({
   dataDirectory: existingDataDirectory
 } = {}) {
   const dataDirectory = existingDataDirectory
-    ?? await mkdtemp(path.join(tmpdir(), 'gongying-http-test-'));
+    ?? await mkdtemp(path.join(tmpdir(), 'synopt-http-test-'));
   const storageDirectory = path.join(dataDirectory, 'videos');
   const databasePath = path.join(dataDirectory, 'test.sqlite');
   let port;
@@ -806,7 +806,7 @@ test('真实 HTTP：账号会话保护上传与讨论，校验 CSRF，并支持�
 });
 
 test('真实 HTTP：重启进程后视频、Range、许可证和讨论仍然存在，内存冷却窗口会清空', async (t) => {
-  const dataDirectory = await mkdtemp(path.join(tmpdir(), 'gongying-restart-test-'));
+  const dataDirectory = await mkdtemp(path.join(tmpdir(), 'synopt-restart-test-'));
   let firstInstance;
   let secondInstance;
   t.after(async () => {

@@ -60,7 +60,7 @@ test('MP4 元数据严格要求 .mp4 扩展名和 video/mp4 MIME', () => {
 });
 
 test('MP4 文件校验读取磁盘文件头并在成功或失败后释放句柄', async () => {
-  const directory = await mkdtemp(path.join(tmpdir(), 'gongying-mp4-test-'));
+  const directory = await mkdtemp(path.join(tmpdir(), 'synopt-mp4-test-'));
   const validPath = path.join(directory, 'valid.upload');
   const invalidPath = path.join(directory, 'invalid.upload');
   try {

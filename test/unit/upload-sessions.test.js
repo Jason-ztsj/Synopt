@@ -10,7 +10,7 @@ import { createUploadSessionManager } from '../../src/upload-sessions.js';
 let nowMs = 1_000_000;
 
 async function withManager(t, { chunkSize = 4, maxUploadBytes = 1024 } = {}) {
-  const dir = await mkdtemp(path.join(tmpdir(), 'gongying-chunks-'));
+  const dir = await mkdtemp(path.join(tmpdir(), 'synopt-chunks-'));
   const manager = createUploadSessionManager({
     temporaryStoragePath: dir,
     maxUploadBytes,
