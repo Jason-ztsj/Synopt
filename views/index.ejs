@@ -74,7 +74,7 @@
                 <h2><a href="/videos/<%= video.id %>"><%= video.title %></a></h2>
                 <p class="catalog-card__creator"><%= video.creator %><% if (video.accountDisplayName) { %> · 由 <%= video.accountDisplayName %> 发布<% } %></p>
                 <% if (video.tags.length) { %><div class="tag-row"><% video.tags.slice(0, 4).forEach(function(tag) { %><a href="/tags/<%= tag.slug %>">#<%= tag.name %></a><% }); %></div><% } %>
-                <div class="catalog-card__signals"><span>认同 <strong><%= video.upvoteCount %></strong></span><span>反对 <strong><%= video.downvoteCount %></strong></span><span><%= video.licenseLabel %></span></div>
+                <div class="catalog-card__signals"><span>推荐度 <strong><%= video.recommendationPercent || 0 %>%</strong></span><span><%= video.licenseLabel %></span></div>
               </div>
             </article>
           <% }); %>

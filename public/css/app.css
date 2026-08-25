@@ -3604,6 +3604,50 @@ dd {
   background: rgba(76, 159, 255, 0.14);
 }
 
+/* 内容价值三档控件（先揭示、后投票） */
+.reaction-group--value {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+.value-picker__hint {
+  font-size: 0.8rem;
+  color: var(--text-soft);
+}
+.value-picker__hint small { color: var(--text-dim); }
+.value-picker__row { display: flex; gap: 7px; }
+.value-picker__option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 11px;
+  color: var(--text-soft);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: rgba(13, 25, 41, 0.76);
+  cursor: pointer;
+  font-size: 0.78rem;
+}
+.value-picker__option.is-active {
+  color: var(--blue-bright);
+  border-color: rgba(76, 159, 255, 0.55);
+  background: rgba(76, 159, 255, 0.14);
+}
+.value-picker__option.is-confirm {
+  border-style: dashed;
+  border-color: rgba(255, 196, 87, 0.7);
+}
+.value-picker__label { display: none; color: var(--text-dim); }
+@media (hover: hover) {
+  .value-picker__option:hover .value-picker__label { display: inline-block; }
+}
+.reaction-group--value.revealed .value-picker__label { display: inline-block; }
+.value-picker__count,
+.value-picker__recommend {
+  font-size: 0.78rem;
+  color: var(--text-soft);
+}
+
 .reaction-button.is-negative,
 .discussion-actions__bar button.is-negative {
   color: var(--orange-soft);

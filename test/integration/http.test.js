@@ -683,7 +683,7 @@ test('真实 HTTP：视频与讨论投票可切换，讨论标题和树状回复
     headers: { accept: 'application/json', cookie: instance.auth.cookieHeader(), 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ _csrf: instance.auth.csrfToken, value: '1' })
   });
-  assert.deepEqual(await videoVote.json(), { upvotes: 1, downvotes: 0, viewerVote: 1 });
+  assert.deepEqual(await videoVote.json(), { valueHighCount: 1, valueMediumCount: 0, valueLowCount: 0, recommendationPercent: 67, viewerValueTier: 1 });
 
   const discussionVote = await fetch(`${instance.baseUrl}/discussions/${topicId}/vote`, {
     method: 'POST',
@@ -736,8 +736,8 @@ test('真实 HTTP：账号会话保护上传与讨论，校验 CSRF，并支持�
   });
   const authenticatedHtml = await authenticatedDetail.text();
   assert.match(authenticatedHtml, /account-chip__avatar[^>]*>🚀<\/span>/);
-  assert.match(authenticatedHtml, /data-vote-kind="up"[^]*?name="value" value="1"/);
-  assert.match(authenticatedHtml, /data-vote-kind="down"[^]*?name="value" value="-1"/);
+  assert.match(authenticatedHtml, /data-value-picker/);
+  assert.match(authenticatedHtml, /data-tier="3"[^]*?收获不大/);
   assert.match(authenticatedHtml, /data-formula-editor/);
   assert.match(authenticatedHtml, /\/static\/js\/math-editor\.js/);
   const mathLiveModule = await fetch(`${instance.baseUrl}/assets/mathlive/mathlive.min.mjs`);

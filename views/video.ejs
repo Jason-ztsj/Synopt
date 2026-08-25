@@ -71,13 +71,23 @@
         <h1><%= video.title %></h1>
         <div class="watch-heading__row">
           <div class="creator-line"><span class="creator-line__avatar" aria-hidden="true"><% if (video.accountUsername && video.accountAvatarStorageName) { %><img src="/users/<%= encodeURIComponent(video.accountUsername) %>/avatar?v=<%= encodeURIComponent(video.accountAvatarStorageName) %>" alt=""><% } else { %><%= Array.from(String(publisher || video.creator))[0] || '同' %><% } %></span><p><strong><%= video.creator %></strong><% if (publisher) { %><small>由 <% if (video.accountUsername) { %><a href="/users/<%= encodeURIComponent(video.accountUsername) %>"><%= publisher %></a><% } else { %><%= publisher %><% } %> 发布</small><% } %></p></div>
-          <div class="reaction-group" aria-label="视频评价">
+          <div class="reaction-group reaction-group--value" aria-label="内容价值评价" data-value-picker
+            data-video-id="<%= videoId %>" data-csrf="<%= safeCsrfToken %>"
+            data-viewer-tier="<%= video.viewerValueTier || 0 %>"
+            data-high="<%= video.valueHighCount || 0 %>" data-medium="<%= video.valueMediumCount || 0 %>" data-low="<%= video.valueLowCount || 0 %>"
+            data-recommend="<%= video.recommendationPercent || 0 %>">
             <% if (withdrawn) { %>
-              <span class="reaction-button reaction-button--static">认同 <strong><%= video.upvoteCount %></strong></span><span class="reaction-button reaction-button--static">反对 <strong><%= video.downvoteCount %></strong></span>
+              <span class="reaction-button reaction-button--static">推荐度 <strong><%= video.recommendationPercent || 0 %>%</strong></span>
             <% } else if (user) { %>
-              <form action="/videos/<%= videoId %>/vote" method="post" data-vote-form data-vote-kind="up"><input type="hidden" name="_csrf" value="<%= safeCsrfToken %>"><input type="hidden" name="value" value="<%= video.viewerVote === 1 ? 0 : 1 %>"><button type="submit" class="reaction-button<% if (video.viewerVote === 1) { %> is-active<% } %>">认同 <strong data-upvotes><%= video.upvoteCount %></strong></button></form>
-              <form action="/videos/<%= videoId %>/vote" method="post" data-vote-form data-vote-kind="down"><input type="hidden" name="_csrf" value="<%= safeCsrfToken %>"><input type="hidden" name="value" value="<%= video.viewerVote === -1 ? 0 : -1 %>"><button type="submit" class="reaction-button<% if (video.viewerVote === -1) { %> is-active is-negative<% } %>">反对 <strong data-downvotes><%= video.downvoteCount %></strong></button></form>
-            <% } else if (signedInUser) { %><span class="reaction-button reaction-button--static" title="账号暂停期间不能投票">认同 <strong><%= video.upvoteCount %></strong></span><span class="reaction-button reaction-button--static" title="账号暂停期间不能投票">反对 <strong><%= video.downvoteCount %></strong></span><% } else { %><a class="reaction-button" href="/login?next=<%= encodeURIComponent('/videos/' + videoId) %>">认同 <strong><%= video.upvoteCount %></strong></a><a class="reaction-button" href="/login?next=<%= encodeURIComponent('/videos/' + videoId) %>">反对 <strong><%= video.downvoteCount %></strong></a><% } %>
+              <span class="value-picker__hint">这次观看你有收获吗？<small>悬停/轻触查看档位含义</small></span>
+              <div class="value-picker__row">
+                <button type="button" class="value-picker__option" data-tier="1"><span class="value-picker__compact">高</span><span class="value-picker__label">受益匪浅</span></button>
+                <button type="button" class="value-picker__option" data-tier="2"><span class="value-picker__compact">中</span><span class="value-picker__label">有所收获</span></button>
+                <button type="button" class="value-picker__option" data-tier="3"><span class="value-picker__compact">低</span><span class="value-picker__label">收获不大</span></button>
+              </div>
+              <span class="value-picker__count">高 <strong data-value-high>0</strong> · 中 <strong data-value-medium>0</strong> · 低 <strong data-value-low>0</strong></span>
+              <span class="value-picker__recommend">推荐度 <strong data-recommend>0%</strong></span>
+            <% } else if (signedInUser) { %><span class="reaction-button reaction-button--static" title="账号暂停期间不能评价">推荐度 <strong><%= video.recommendationPercent || 0 %>%</strong></span><% } else { %><a class="reaction-button" href="/login?next=<%= encodeURIComponent('/videos/' + videoId) %>">登录后评价</a><% } %>
           </div>
         </div>
         <% if (user && !isOwner && !withdrawn && video.moderationStatus === 'visible') { %><details class="report-disclosure"><summary>举报这段视频</summary><form action="/videos/<%= videoId %>/reports" method="post"><input type="hidden" name="_csrf" value="<%= safeCsrfToken %>"><label>问题类型<select name="reasonCategory" required><option value="">请选择</option><% Object.entries(typeof reportReasons !== 'undefined' ? reportReasons : {}).forEach(function(entry) { %><option value="<%= entry[0] %>"><%= entry[1] %></option><% }); %></select></label><label>具体说明（20–2000 字）<textarea name="description" minlength="20" maxlength="2000" required></textarea></label><button class="button button--quiet" type="submit">提交举报</button></form></details><% } %>

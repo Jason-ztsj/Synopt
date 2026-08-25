@@ -38,11 +38,24 @@ import {
 import { DiscussionRateLimiter } from './rate-limit.js';
 import { createUploadSessionManager } from './upload-sessions.js';
 import {
+  RANKING_VERSION,
+  RANKING_PARAMS,
+  RANKING_INPUTS,
+  RANKING_NOT_USED,
+  baseValue,
+  hotRank,
+  evergreenRank,
+  currentCycleNumber,
+  pickRevivals,
+  isRevivedBoosted
+} from './ranking.js';
+import {
   validateDiscussionBody,
   validateDiscussionTitle,
   validateCategorySlug,
   validateTags,
   validateVoteValue,
+  validateVideoValueTier,
   validateLoginFields,
   validatePassword,
   validateProfileFields,
@@ -798,19 +811,48 @@ export function createApp(options = {}) {
     getClientKey: (request) => getClientIp(request, config.clientIpMode)
   }));
 
+  const rankVideosForListing = (videos, nowMs, { evergreen = false } = {}) => {
+    if (!Array.isArray(videos) || videos.length === 0) return videos;
+    const cycle = currentCycleNumber(nowMs, RANKING_PARAMS);
+    const cycleMs = RANKING_PARAMS.revivalEveryHours * 3600 * 1000;
+    const cycleStartMs = cycle * cycleMs;
+    const candidates = videos.map((video) => ({
+      ...video,
+      value: baseValue({
+        high: video.valueHighCount ?? 0,
+        medium: video.valueMediumCount ?? 0,
+        low: video.valueLowCount ?? 0,
+        topics: video.discussionTopics ?? 0,
+        replies: video.discussionReplies ?? 0,
+        deep: video.discussionDeepReplies ?? 0
+      }, RANKING_PARAMS),
+      ageHours: Math.max(0, (nowMs - new Date(video.createdAt).getTime()) / 3600000),
+      ageDays: Math.max(0, (nowMs - new Date(video.createdAt).getTime()) / 86400000)
+    }));
+    const revivedIds = evergreen ? new Set() : pickRevivals(candidates, cycle, RANKING_PARAMS);
+    return candidates.map((video) => {
+      const base = evergreen
+        ? evergreenRank(video.value, video.ageDays, RANKING_PARAMS)
+        : hotRank(video.value, video.ageHours, RANKING_PARAMS);
+      const boosted = !evergreen && isRevivedBoosted(video.id, revivedIds, cycleStartMs, nowMs, RANKING_PARAMS);
+      return { ...video, rankValue: base, isRevived: boosted };
+    }).sort((a, b) => b.rankValue - a.rankValue
+      || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  };
+
   const renderVideoListing = (request, response, next, overrides = {}) => {
     try {
       const query = String(overrides.query ?? request.query.q ?? '').trim().slice(0, 120);
       const categorySlug = String(overrides.categorySlug ?? request.query.category ?? '').trim().slice(0, 48);
       const tagSlug = String(overrides.tagSlug ?? request.query.tag ?? '').trim().slice(0, 48);
-      const videos = database.listVideos({ query, categorySlug, tagSlug }).map((video) => ({
+      const videos = rankVideosForListing(database.listVideos({ query, categorySlug, tagSlug }), now(), { evergreen: Boolean(overrides.evergreen) }).map((video) => ({
         ...video,
         licenseLabel: getLicense(video.licenseCode)?.code ?? video.licenseCode
       }));
       response.render('index', {
         videos,
         filters: { query, categorySlug, tagSlug },
-        listingTitle: overrides.listingTitle ?? (query ? `“${query}”的搜索结果` : '最近发布'),
+        listingTitle: overrides.listingTitle ?? (query ? `“${query}”的搜索结果` : '推荐内容'),
         ...catalogLocals()
       });
     } catch (error) {
@@ -819,6 +861,7 @@ export function createApp(options = {}) {
   };
 
   app.get('/', (request, response, next) => renderVideoListing(request, response, next));
+  app.get('/featured', (request, response, next) => renderVideoListing(request, response, next, { evergreen: true, listingTitle: '典范视频' }));
   app.get('/search', (request, response, next) => renderVideoListing(request, response, next));
   app.get('/categories/:slug', (request, response, next) => {
     const category = database.getCategoryBySlug(request.params.slug);
@@ -847,7 +890,13 @@ export function createApp(options = {}) {
   app.get('/categories', (_request, response) => response.render('categories', catalogLocals()));
   app.get('/tags', (_request, response) => response.render('tags', catalogLocals()));
   app.get('/about', (_request, response) => response.render('about', catalogLocals()));
-  app.get('/algorithm', (_request, response) => response.render('algorithm', catalogLocals()));
+  app.get('/algorithm', (_request, response) => response.render('algorithm', {
+    ...catalogLocals(),
+    rankingVersion: RANKING_VERSION,
+    rankingParams: RANKING_PARAMS,
+    rankingInputs: RANKING_INPUTS,
+    rankingNotUsed: RANKING_NOT_USED
+  }));
 
   const accountFlash = (value) => ({
     profile: '个人资料已更新。',
@@ -1843,13 +1892,19 @@ export function createApp(options = {}) {
       ) {
         throw new AppError('找不到这段视频', 404, 'VIDEO_NOT_FOUND');
       }
-      const value = validateVoteValue(request.body?.value);
-      const updated = database.setVideoVote(video.id, request.currentUser.id, value, nowIso());
+      const tier = validateVideoValueTier(request.body?.value);
+      const updated = database.setVideoVote(video.id, request.currentUser.id, tier, nowIso());
       if (!updated) {
         throw new AppError('账号或视频状态已经变化，请刷新后重试', 409, 'VIDEO_VOTE_STATE_CONFLICT');
       }
       if (wantsJson(request)) {
-        response.status(200).json({ upvotes: updated.upvoteCount, downvotes: updated.downvoteCount, viewerVote: updated.viewerVote });
+        response.status(200).json({
+          valueHighCount: updated.valueHighCount,
+          valueMediumCount: updated.valueMediumCount,
+          valueLowCount: updated.valueLowCount,
+          recommendationPercent: updated.recommendationPercent,
+          viewerValueTier: updated.viewerValueTier
+        });
         return;
       }
       response.redirect(303, `/videos/${video.id}`);

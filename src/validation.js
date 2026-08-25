@@ -88,6 +88,12 @@ export function validateVoteValue(value) {
   return parsed;
 }
 
+export function validateVideoValueTier(value) {
+  const parsed = Number(value);
+  if (![0, 1, 2, 3].includes(parsed)) throw new ValidationError('价值档位无效');
+  return parsed;
+}
+
 export function validateUsername(value) {
   const username = normalizeUsername(value);
   if (username.length === 0) throw new ValidationError('请填写用户名');

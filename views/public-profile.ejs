@@ -58,7 +58,7 @@
                   <div class="catalog-card__context"><% if (video.categoryName || video.category_name) { %><span><%= video.categoryName || video.category_name %></span><% } else { %><span>未分类</span><% } %><% if (video.createdAt || video.created_at) { %><time datetime="<%= video.createdAt || video.created_at %>"><%= shortDate(video.createdAt || video.created_at) %></time><% } %></div>
                   <h2><a href="/videos/<%= video.id %>"><%= video.title %></a></h2><p class="catalog-card__creator"><%= video.creator %></p>
                   <% if (tags.length) { %><div class="tag-row"><% tags.slice(0, 4).forEach(function(tag) { %><a href="/tags/<%= tag.slug %>">#<%= tag.name %></a><% }); %></div><% } %>
-                  <div class="catalog-card__signals"><span>认同 <strong><%= Number(video.upvoteCount ?? video.upvote_count ?? 0) || 0 %></strong></span><span>反对 <strong><%= Number(video.downvoteCount ?? video.downvote_count ?? 0) || 0 %></strong></span><% if (video.licenseLabel || video.licenseCode || video.license_code) { %><span><%= video.licenseLabel || video.licenseCode || video.license_code %></span><% } %></div>
+                  <div class="catalog-card__signals"><span>推荐度 <strong><%= Number(video.recommendationPercent) || 0 %>%</strong></span><% if (video.licenseLabel || video.licenseCode || video.license_code) { %><span><%= video.licenseLabel || video.licenseCode || video.license_code %></span><% } %></div>
                 </div>
               </article>
             <% }); %>

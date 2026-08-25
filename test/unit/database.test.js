@@ -54,8 +54,16 @@ function video(id, createdAt) {
     tags: [],
     upvoteCount: 0,
     downvoteCount: 0,
+    valueHighCount: 0,
+    valueMediumCount: 0,
+    valueLowCount: 0,
+    recommendationPercent: 0,
     discussionCount: 0,
+    discussionTopics: 0,
+    discussionReplies: 0,
+    discussionDeepReplies: 0,
     viewerVote: 0,
+    viewerValueTier: 0,
     archivePublic: false,
     withdrawnAt: null,
     deletedAt: null,
@@ -294,7 +302,7 @@ test('schema v0 无账号数据库迁移到最新版，并保留视频、讨论�
 
     database = openDatabase(databasePath);
     assert.equal(database.getSchemaVersion(), CURRENT_SCHEMA_VERSION);
-    assert.equal(CURRENT_SCHEMA_VERSION, 6);
+    assert.equal(CURRENT_SCHEMA_VERSION, 7);
     assert.equal(database.raw.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
     assert.deepEqual(database.raw.prepare('PRAGMA foreign_key_check').all(), []);
     const migratedVideo = database.getVideo('legacy-video');
@@ -697,7 +705,7 @@ test('分类、标签、树状讨论、搜索与双向投票保持可查询和�
     assert.equal(database.getDiscussion(reply.id).parentId, topic.id);
 
     assert.equal(database.setVideoVote(stored.id, user.id, 1, '2026-08-23T04:00:00.000Z').upvoteCount, 1);
-    assert.equal(database.setVideoVote(stored.id, user.id, -1, '2026-08-23T04:01:00.000Z').downvoteCount, 1);
+    assert.equal(database.setVideoVote(stored.id, user.id, 3, '2026-08-23T04:01:00.000Z').downvoteCount, 1);
     assert.equal(database.setVideoVote(stored.id, user.id, 0, '2026-08-23T04:02:00.000Z').downvoteCount, 0);
     assert.equal(database.setDiscussionVote(topic.id, user.id, 1, '2026-08-23T04:03:00.000Z').viewerVote, 1);
     assert.deepEqual(database.raw.prepare('PRAGMA foreign_key_check').all(), []);
@@ -744,9 +752,9 @@ test('公开个人页的讨论和获票统计不泄露私有、撤回、隐藏�
     }
     database.withdrawVideo('profile-withdrawn', owner.id, '2026-08-23T07:11:00.000Z');
     database.setVideoVote('profile-public', voter.id, 1, '2026-08-23T07:12:00.000Z');
-    database.setVideoVote('profile-private', voter.id, -1, '2026-08-23T07:13:00.000Z');
+    database.setVideoVote('profile-private', voter.id, 3, '2026-08-23T07:13:00.000Z');
     database.setVideoVote('profile-withdrawn', voter.id, 1, '2026-08-23T07:14:00.000Z');
-    database.setVideoVote('profile-hidden', voter.id, -1, '2026-08-23T07:15:00.000Z');
+    database.setVideoVote('profile-hidden', voter.id, 3, '2026-08-23T07:15:00.000Z');
     database.setVideoVote('profile-pending', voter.id, 1, '2026-08-23T07:16:00.000Z');
 
     const profile = database.getPublicUserProfile(owner.username);
@@ -1314,14 +1322,12 @@ test('通知偏好、回复通知、投票聚合、系统链接和已读状态�
     database.setVideoVote('notify-video', voterA.id, 1, '2026-08-23T13:06:20.000Z');
     assert.equal(database.getUnreadNotificationCount(owner.id), 2, '取消后重新投票不会刷高净人数');
 
-    database.setVideoVote('notify-video', voterA.id, -1, '2026-08-23T13:06:30.000Z');
-    database.setVideoVote('notify-video', voterA.id, -1, '2026-08-23T13:06:40.000Z');
+    database.setVideoVote('notify-video', voterA.id, 3, '2026-08-23T13:06:30.000Z');
     let unreadVotes = database.listNotifications(owner.id, { unreadOnly: true }).items;
-    assert.deepEqual(
-      Object.fromEntries(unreadVotes.map((item) => [item.type, item.count])),
-      { video_downvote: 1, video_upvote: 1 },
-      '切换方向会从旧方向移除并只向新方向加入一次'
-    );
+    // 三档价值下"低价值"(3)不向作者发送通知；切向低价值会取消该账号的高价值认可
+    assert.equal(unreadVotes.length, 1, '切向低价值不应新增方向通知');
+    assert.equal(unreadVotes[0].type, 'video_upvote');
+    assert.equal(unreadVotes[0].count, 1, '切向低价值会取消该账号的高价值认可');
     database.setVideoVote('notify-video', voterA.id, 1, '2026-08-23T13:06:50.000Z');
     unreadVotes = database.listNotifications(owner.id, { unreadOnly: true }).items;
     assert.equal(unreadVotes.length, 1);
@@ -1340,22 +1346,21 @@ test('通知偏好、回复通知、投票聚合、系统链接和已读状态�
       notification.id, owner.id, '2026-08-23T13:07:00.000Z'
     ).isRead, true);
 
-    database.setVideoVote('notify-video', voterA.id, -1, '2026-08-23T13:08:00.000Z');
-    notification = database.listNotifications(owner.id).items[0];
-    assert.equal(notification.type, 'video_downvote');
-    assert.equal(notification.count, 1);
+    database.setVideoVote('notify-video', voterA.id, 3, '2026-08-23T13:08:00.000Z');
+    // 低价值不生成独立通知
+    assert.equal(database.listNotifications(owner.id).items.some((item) => item.type === 'video_downvote'), false);
     const system = database.createSystemNotification({
       recipientUserId: owner.id, title: '稿件需要修改', body: '请检查封面',
       link: '/account/videos?status=returned', createdAt: '2026-08-23T13:09:00.000Z'
     });
     assert.equal(system.systemLink, '/account/videos?status=returned');
-    assert.equal(database.markAllNotificationsRead(owner.id, '2026-08-23T13:10:00.000Z'), 2);
+    assert.equal(database.markAllNotificationsRead(owner.id, '2026-08-23T13:10:00.000Z'), 1);
     assert.equal(database.getUnreadNotificationCount(owner.id), 0);
 
     database.updateNotificationPreferences(owner.id, {
       reply: true, videoVote: false, system: false
     }, '2026-08-23T13:11:00.000Z');
-    database.setVideoVote('notify-video', voterB.id, -1, '2026-08-23T13:12:00.000Z');
+    database.setVideoVote('notify-video', voterB.id, 3, '2026-08-23T13:12:00.000Z');
     assert.equal(database.createSystemNotification({
       recipientUserId: owner.id, title: '不会生成', createdAt: '2026-08-23T13:13:00.000Z'
     }), null);

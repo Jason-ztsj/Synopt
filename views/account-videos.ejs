@@ -52,8 +52,7 @@
                 const validation = video.validationStatus || video.validation_status;
                 const canRepublish = withdrawn && ['ready', 'ready_with_warnings'].includes(validation);
                 const coverName = video.coverStorageName || video.cover_storage_name;
-                const upvotes = Number(video.upvoteCount ?? video.upvote_count ?? 0) || 0;
-                const downvotes = Number(video.downvoteCount ?? video.downvote_count ?? 0) || 0;
+                const recommendation = Number(video.recommendationPercent ?? video.recommendation_percent ?? 0) || 0;
                 const discussionsCount = Number(video.discussionCount ?? video.discussion_count ?? 0) || 0;
               %>
                 <article class="account-video-card" id="video-<%= video.id %>">
@@ -64,7 +63,7 @@
                     <div class="account-video-card__topline"><span class="content-status content-status--<%= status.key %>"><%= status.label %></span><% if (video.createdAt || video.created_at) { %><time datetime="<%= video.createdAt || video.created_at %>"><%= videoDate(video.createdAt || video.created_at) %></time><% } %></div>
                     <h2><a href="/videos/<%= video.id %>"><%= deleted ? '已删除作品' : video.title %></a></h2>
                     <% if (!deleted) { %><p><%= video.creator || '未填写创作者' %><% if (video.categoryName || video.category_name) { %> · <%= video.categoryName || video.category_name %><% } %></p><% } else { %><p>作品文件与可识别元数据已清除，讨论存档仍可阅读。</p><% } %>
-                    <div class="account-video-card__signals"><span>认同 <strong><%= deleted ? 0 : upvotes %></strong></span><span>反对 <strong><%= deleted ? 0 : downvotes %></strong></span><span>讨论 <strong><%= discussionsCount %></strong></span></div>
+                    <div class="account-video-card__signals"><span>推荐度 <strong><%= deleted ? 0 : recommendation %>%</strong></span><span>讨论 <strong><%= discussionsCount %></strong></span></div>
                     <% if (!deleted) { %>
                       <div class="account-video-card__actions">
                         <a href="/videos/<%= video.id %>">查看稿件</a>

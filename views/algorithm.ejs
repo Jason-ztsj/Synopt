@@ -10,20 +10,82 @@
         <h1>算法应该是公开规则，<br><em>不是看不见的操纵。</em></h1>
         <p>本页只描述当前真正运行的排序。计划中的能力会明确标注，不会冒充已经上线的功能。</p>
       </header>
+
       <section class="algorithm-status" aria-labelledby="active-ranking-title">
-        <div class="algorithm-status__badge">当前生效 · v1</div>
-        <h2 id="active-ranking-title">首页与搜索结果：按发布时间倒序</h2>
-        <pre><code>ORDER BY created_at DESC, id DESC</code></pre>
+        <div class="algorithm-status__badge">当前生效 · v<%= rankingVersion || '0' %></div>
+        <h2 id="active-ranking-title">全部目录（首页/搜索/分类/标签）：按价值热排序</h2>
+        <pre><code>hot = value / (min(age小时, ageCap天) + 2)^gravity</code></pre>
         <dl>
-          <div><dt>参数</dt><dd>无</dd></div>
-          <div><dt>使用的数据</dt><dd>作品发布时间；同一时间下使用作品 ID 保持结果稳定</dd></div>
+          <div><dt>使用的数据</dt><dd>三档价值投票计数、讨论结构（主题/直接回复/深层回复）、发布年龄、视频时长（复活成本权重）、作者（复活名额上限）</dd></div>
           <div><dt>不使用的数据</dt><dd>观看历史、停留时长、点击序列、设备指纹、关注关系和用户画像</dd></div>
-          <div><dt>个性化</dt><dd>当前没有个性化推荐</dd></div>
+          <div><dt>个性化</dt><dd>当前没有个性化推荐（公开全局排序）</dd></div>
         </dl>
+        <p>典范视频页（<code>/featured</code>）按时间无关的价值排序（evergreen），是"经久不衰"内容的归宿。</p>
       </section>
-      <section class="information-section">
-        <h2>计划中的方向</h2>
-        <p>未来可以加入带时间衰减的公共热度排序，以及依据用户主动关注、屏蔽标签和本地聚合偏好的可选排序。具体公式上线前会先公开版本、参数、示例和变更记录。</p>
+
+      <section class="information-section" aria-labelledby="planned-ranking-title">
+        <p class="eyebrow"><span></span> 排序说明</p>
+        <h2 id="planned-ranking-title">v1 价值排序（透明、可复算）</h2>
+        <p>以下描述的是当前真正运行的排序引擎 <code>src/ranking.js</code>（版本 <strong>v<%= rankingVersion %></strong>），全部公式、参数、输入与数据边界均公开。</p>
+
+        <h3>核心公式</h3>
+        <pre><code>value = wValue · (三档价值投票的Beta样本校正均值 × 参与度增益) + wDiscussion · 讨论深度
+hot        = value / ( min(age小时, ageCap天) + 2 )^gravity
+evergreen  = value / ( min(age天, 730) + 1 )^evergreenGravity</code></pre>
+        <p>三档价值投票：高=1、中=0.5、低=0，用 Beta 先验做样本校正（低样本被拉向中性，防少数人窜顶）。讨论深度奖励"真正的来回探讨"：主题、直接回复、深层(≥2)回复按权重合成并设上限。hot 有软下限（超过 ageCap 天不再衰减），好而旧的内容不会归零；evergreen（典范）页时间基本无关，是"经久不衰"内容的归宿。</p>
+
+        <h3>复活机制</h3>
+        <pre><code>每 revivalEveryHours 小时一个周期，选 revivalSlots 个
+选择分 = ln(时长分钟) · revivalDurationWeight + hash(videoId + cycle)
+资格：value ≥ revivalMinValue 且 revivalMinDaysOld ≤ 年龄 ≤ revivalMaxDaysOld
+加成：选中后 revivalBoostHours 小时内，hot 分 × revivalBoostFactor
+限制：每周期每作者最多 revivalAuthorCap 个</code></pre>
+        <p>复活是确定性、公开、限时的"重新被发现"：用 <code>hash(videoId, cycle)</code> 而非真随机，任何人都能复算本周期谁会复活；时长取对数做创作成本权重，让高成本内容多一次机会，但不会凌驾质量——因为先有质量门槛。它用来对抗时间衰减把好内容埋死、以及"强者恒强"的马太效应。</p>
+
+        <h3>参数</h3>
+        <table class="algorithm-table">
+          <thead><tr><th>参数</th><th>值</th><th>含义</th></tr></thead>
+          <tbody>
+            <% const paramNotes = {
+              valueHighScore: '高价值档的计分',
+              valueMediumScore: '中档的计分',
+              valueLowScore: '低档的计分',
+              hourOffset: '衰减分母的偏移（避免新内容被除得太小）',
+              gravity: 'hot 时间衰减指数',
+              ageCapDays: 'hot 软下限天数（超过后不再衰减）',
+              valuePriorAlpha: 'Beta 先验 α（样本校正）',
+              valuePriorBeta: 'Beta 先验 β',
+              valueParticipationFull: '价值信号计入所需的投票人数',
+              wValue: '价值信号权重',
+              wDiscussion: '讨论深度权重（平台身份，权重更高）',
+              discussionCap: '讨论深度上限',
+              discussionTopicWeight: '一个顶层讨论主题的计分',
+              discussionReplyWeight: '一条直接回复的计分',
+              discussionDeepWeight: '一条深层(≥2)回复的计分',
+              evergreenGravity: '典范页衰减指数（几乎不衰减）',
+              revivalEveryHours: '复活周期（小时）',
+              revivalSlots: '每周期复活名额',
+              revivalBoostHours: '复活加成持续（小时）',
+              revivalBoostFactor: '复活加成倍数',
+              revivalMinDaysOld: '可复活的年龄下限（天）',
+              revivalMaxDaysOld: '可复活的年龄上限（天）',
+              revivalMinValue: '复活的质量门槛',
+              revivalAuthorCap: '每周期每作者复活名额上限',
+              revivalDurationWeight: '时长成本权重（ln 分钟）'
+            }; %>
+            <% Object.entries(rankingParams).forEach(([key, value]) => { %>
+              <tr><td><code><%= key %></code></td><td><code><%= value %></code></td><td><%= paramNotes[key] || '' %></td></tr>
+            <% }) %>
+          </tbody>
+        </table>
+
+        <h3>使用的数据</h3>
+        <ul><% rankingInputs.forEach((item) => { %><li><%= item %></li><% }) %></ul>
+
+        <h3>不使用（数据边界）</h3>
+        <ul><% rankingNotUsed.forEach((item) => { %><li><%= item %></li><% }) %></ul>
+
+        <p class="algorithm-note">机制已通过 <code>scripts/validate-ranking.js</code> 的离线校验（种子目录 + 不变量断言）：单作者不霸榜、新而好的内容能浮上来、死内容掉出、老而好内容在典范页有归宿、复活确定且作者受限、衰减有下限。品味（"高/中/低"是否真是好的价值信号）需等真实互动数据后校准。</p>
       </section>
     </main>
   </div>

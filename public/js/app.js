@@ -838,6 +838,77 @@
   document.querySelectorAll('[data-discussion-form]').forEach(setupDiscussionForm);
   document.querySelectorAll('[data-validation-watch]').forEach(setupValidationWatch);
   document.querySelectorAll('[data-vote-form]').forEach(setupVoteForm);
+
+  function setupValuePicker(group) {
+    const videoId = group.dataset.videoId;
+    const csrf = group.dataset.csrf;
+    const opts = Array.from(group.querySelectorAll('[data-tier]'));
+    const count = {
+      high: group.querySelector('[data-value-high]'),
+      medium: group.querySelector('[data-value-medium]'),
+      low: group.querySelector('[data-value-low]'),
+      recommend: group.querySelector('[data-recommend]')
+    };
+    let pendingTier = 0;
+    const hoverCapable = window.matchMedia && window.matchMedia('(hover: hover)').matches;
+
+    const refresh = (state) => {
+      if (count.high) count.high.textContent = String(state.high);
+      if (count.medium) count.medium.textContent = String(state.medium);
+      if (count.low) count.low.textContent = String(state.low);
+      if (count.recommend) count.recommend.textContent = `${state.recommend}%`;
+      opts.forEach((btn) => btn.classList.toggle('is-active', Number(btn.dataset.tier) === state.viewerTier));
+      group.dataset.viewerTier = String(state.viewerTier);
+    };
+
+    const current = () => ({
+      high: Number(group.dataset.high || 0),
+      medium: Number(group.dataset.medium || 0),
+      low: Number(group.dataset.low || 0),
+      recommend: Number(group.dataset.recommend || 0),
+      viewerTier: Number(group.dataset.viewerTier || 0)
+    });
+
+    refresh(current());
+
+    async function vote(tier) {
+      try {
+        const response = await fetch(`/videos/${videoId}/vote`, {
+          method: 'POST',
+          headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+          body: new URLSearchParams({ _csrf: csrf, value: String(tier) }).toString()
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || '评价失败');
+        group.dataset.high = String(result.valueHighCount);
+        group.dataset.medium = String(result.valueMediumCount);
+        group.dataset.low = String(result.valueLowCount);
+        group.dataset.recommend = String(result.recommendationPercent);
+        refresh({ high: result.valueHighCount, medium: result.valueMediumCount, low: result.valueLowCount, recommend: result.recommendationPercent, viewerTier: result.viewerValueTier });
+        pendingTier = 0;
+        group.classList.remove('revealed');
+      } catch (error) {
+        if (count.recommend) count.recommend.textContent = error.message || '评价失败';
+      }
+    }
+
+    opts.forEach((btn) => {
+      const tier = Number(btn.dataset.tier);
+      btn.addEventListener('click', (event) => {
+        event.preventDefault();
+        if (!hoverCapable && !group.classList.contains('revealed')) {
+          group.classList.add('revealed');
+          pendingTier = tier;
+          opts.forEach((b) => b.classList.toggle('is-confirm', Number(b.dataset.tier) === pendingTier));
+          return;
+        }
+        const active = tier === Number(group.dataset.viewerTier || 0);
+        vote(active ? 0 : tier);
+      });
+    });
+  }
+
+  document.querySelectorAll('[data-value-picker]').forEach(setupValuePicker);
   document.querySelectorAll('[data-reply-toggle]').forEach(setupReplyComposer);
   document.querySelectorAll('[data-account-menu]').forEach(setupAccountMenu);
   document.querySelectorAll('[data-confirm-message]').forEach(setupConfirmationForm);

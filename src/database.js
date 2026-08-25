@@ -2,8 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createGovernanceStore } from './governance-store.js';
+import { valueScore } from './ranking.js';
 
-export const CURRENT_SCHEMA_VERSION = 6;
+export const CURRENT_SCHEMA_VERSION = 7;
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 100;
@@ -74,8 +75,16 @@ function mapVideo(row) {
       : [],
     upvoteCount: row.upvote_count ?? 0,
     downvoteCount: row.downvote_count ?? 0,
+    valueHighCount: row.upvote_count ?? 0,
+    valueMediumCount: row.value_medium_count ?? 0,
+    valueLowCount: row.downvote_count ?? 0,
+    recommendationPercent: Math.round(valueScore({ high: row.upvote_count ?? 0, medium: row.value_medium_count ?? 0, low: row.downvote_count ?? 0 }) * 100),
     discussionCount: row.discussion_count ?? 0,
+    discussionTopics: row.dm_topic_count ?? 0,
+    discussionReplies: row.dm_reply_count ?? 0,
+    discussionDeepReplies: row.dm_deep_count ?? 0,
     viewerVote: row.viewer_vote ?? 0,
+    viewerValueTier: row.viewer_vote ?? 0,
     archivePublic: row.archive_public === 1,
     withdrawnAt: row.withdrawn_at ?? null,
     deletedAt: row.deleted_at ?? null,
@@ -1066,6 +1075,50 @@ function migrateToV6(database) {
   }
 }
 
+function migrateToV7(database) {
+  database.exec('PRAGMA foreign_keys = OFF');
+  database.exec('BEGIN IMMEDIATE');
+  try {
+    // Another process may have completed the migration while this connection
+    // waited for the write lock. Re-read the version after BEGIN IMMEDIATE.
+    if (database.prepare('PRAGMA user_version').get().user_version >= 7) {
+      database.exec('COMMIT');
+      return;
+    }
+    // 视频投票从"认同/反对(±1)"改为"三档价值(1=高/2=中/3=低)"，为透明价值排序提供信号。
+    // 旧数据映射：认同(1)→高(1)，反对(-1)→低(3)。
+    database.exec(`
+      CREATE TABLE video_votes_v2 (
+        video_id TEXT NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        value INTEGER NOT NULL CHECK (value IN (1, 2, 3)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (video_id, user_id)
+      ) STRICT;
+    `);
+    database.exec(`
+      INSERT INTO video_votes_v2 (video_id, user_id, value, created_at, updated_at)
+      SELECT video_id, user_id,
+        CASE value WHEN 1 THEN 1 WHEN -1 THEN 3 ELSE 2 END,
+        created_at, updated_at
+      FROM video_votes;
+    `);
+    database.exec('DROP TABLE video_votes');
+    database.exec('ALTER TABLE video_votes_v2 RENAME TO video_votes');
+    database.exec('CREATE INDEX idx_video_votes_video_value ON video_votes(video_id, value)');
+    const foreignKeyErrors = database.prepare('PRAGMA foreign_key_check').all();
+    if (foreignKeyErrors.length > 0) throw new Error('数据库 v7 迁移后的外键检查失败');
+    database.exec('PRAGMA user_version = 7');
+    database.exec('COMMIT');
+  } catch (error) {
+    database.exec('ROLLBACK');
+    throw error;
+  } finally {
+    database.exec('PRAGMA foreign_keys = ON');
+  }
+}
+
 function migrate(database) {
   let version = database.prepare('PRAGMA user_version').get().user_version;
   if (version > CURRENT_SCHEMA_VERSION) {
@@ -1090,6 +1143,7 @@ function migrate(database) {
   ensureV4SupplementalSchema(database);
   if (version < 5) migrateToV5(database);
   if (version < 6) migrateToV6(database);
+  if (version < 7) migrateToV7(database);
   ensureV5GovernanceConstraints(database);
 }
 
@@ -1128,8 +1182,12 @@ export function openDatabase(databasePath) {
         ) AS tag_row
       ) AS tag_list,
       (SELECT count(*) FROM video_votes AS vv WHERE vv.video_id = v.id AND vv.value = 1) AS upvote_count,
-      (SELECT count(*) FROM video_votes AS vv WHERE vv.video_id = v.id AND vv.value = -1) AS downvote_count,
-      (SELECT count(*) FROM discussions AS vd WHERE vd.video_id = v.id AND vd.deleted_at IS NULL) AS discussion_count
+      (SELECT count(*) FROM video_votes AS vv WHERE vv.video_id = v.id AND vv.value = 2) AS value_medium_count,
+      (SELECT count(*) FROM video_votes AS vv WHERE vv.video_id = v.id AND vv.value = 3) AS downvote_count,
+      (SELECT count(*) FROM discussions AS vd WHERE vd.video_id = v.id AND vd.deleted_at IS NULL) AS discussion_count,
+      (SELECT count(*) FROM discussions AS d0 WHERE d0.video_id = v.id AND d0.parent_id IS NULL AND d0.deleted_at IS NULL AND d0.moderation_status = 'visible') AS dm_topic_count,
+      (SELECT count(*) FROM discussions AS d1 WHERE d1.video_id = v.id AND d1.parent_id IS NOT NULL AND d1.deleted_at IS NULL AND d1.moderation_status = 'visible' AND (SELECT d2.parent_id FROM discussions AS d2 WHERE d2.id = d1.parent_id) IS NULL) AS dm_reply_count,
+      (SELECT count(*) FROM discussions AS d1 WHERE d1.video_id = v.id AND d1.parent_id IS NOT NULL AND d1.deleted_at IS NULL AND d1.moderation_status = 'visible' AND (SELECT d2.parent_id FROM discussions AS d2 WHERE d2.id = d1.parent_id) IS NOT NULL) AS dm_deep_count
     FROM videos AS v
     LEFT JOIN users AS u ON u.id = v.user_id
     LEFT JOIN categories AS c ON c.id = v.category_id AND c.is_active = 1
@@ -1356,7 +1414,7 @@ export function openDatabase(databasePath) {
             AND v.withdrawn_at IS NULL AND v.deleted_at IS NULL) AS received_upvote_count,
         (SELECT count(*) FROM video_votes AS vv
           JOIN videos AS v ON v.id = vv.video_id
-          WHERE v.user_id = u.id AND vv.value = -1
+          WHERE v.user_id = u.id AND vv.value = 3
             AND v.validation_status IN ('ready', 'ready_with_warnings')
             AND v.visibility = 'public' AND v.moderation_status = 'visible'
             AND v.withdrawn_at IS NULL AND v.deleted_at IS NULL) AS received_downvote_count
@@ -1851,6 +1909,7 @@ export function openDatabase(databasePath) {
       const video = mapVideo(statements.getVideo.get(id));
       if (video && viewerUserId) {
         video.viewerVote = statements.getVideoVote.get(id, viewerUserId)?.value ?? 0;
+        video.viewerValueTier = video.viewerVote;
       }
       return video;
     },
