@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile, spawnSync } from 'node:child_process';
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -158,28 +158,25 @@ test('只有合法 ftyp 文件头、主体为垃圾的伪 MP4 会被完整探测
   }
 });
 
-test('服务端会拒绝绕过浏览器直接提交的旋转 WebM', {
-  skip: mediaToolsAvailable ? false : '系统没有 ffmpeg/ffprobe',
-  timeout: 30_000
-}, async () => {
+test('服务端会拒绝绕过浏览器直接提交的旋转 WebM', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'tongjian-validator-rotation-'));
-  const plainPath = path.join(directory, 'plain.webm');
   const rotatedPath = path.join(directory, 'rotated.webm');
+  const probePath = path.join(directory, 'ffprobe-fixture');
   try {
-    await execFileAsync('ffmpeg', [
-      '-nostdin', '-hide_banner', '-loglevel', 'error',
-      '-f', 'lavfi', '-i', 'color=c=black:s=64x64:r=4:d=1',
-      '-c:v', 'libvpx-vp9', '-deadline', 'realtime', '-cpu-used', '8',
-      '-an', '-y', plainPath
-    ], { timeout: 20_000, maxBuffer: 1024 * 1024 });
-    await execFileAsync('ffmpeg', [
-      '-nostdin', '-hide_banner', '-loglevel', 'error',
-      '-i', plainPath, '-map', '0', '-c', 'copy',
-      '-metadata:s:v:0', 'rotate=90', '-y', rotatedPath
-    ], { timeout: 20_000, maxBuffer: 1024 * 1024 });
+    await writeFile(rotatedPath, Buffer.alloc(32, 0x1a));
+    await writeFile(probePath, `#!/usr/bin/env node
+process.stdout.write(JSON.stringify({
+  format: { format_name: 'matroska,webm', duration: '1', size: '32', nb_streams: 1 },
+  streams: [{
+    index: 0, codec_name: 'vp9', codec_type: 'video', width: 64, height: 64,
+    avg_frame_rate: '4/1', nb_read_packets: '4', tags: { rotate: '90' }
+  }]
+}));
+`);
+    await chmod(probePath, 0o700);
 
     await assert.rejects(
-      () => probeCanonicalMedia(rotatedPath, 'video/webm', loadConfig({}, directory)),
+      () => probeCanonicalMedia(rotatedPath, 'video/webm', loadConfig({ FFPROBE_PATH: probePath }, directory)),
       (error) => error instanceof MediaRejectedError && error.code === 'UNSUPPORTED_ROTATION_METADATA'
     );
   } finally {

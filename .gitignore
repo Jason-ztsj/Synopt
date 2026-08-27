@@ -7,7 +7,6 @@ backups/
 coverage/
 test-results/
 screenshots/
-docs/cms-learning-guide.md
 npm-debug.log*
 *.sqlite
 *.sqlite-shm

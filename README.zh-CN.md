@@ -8,7 +8,7 @@
 
 “同见”是一个面向开放知识与非营利视频分享的实验性 MVP：任何人都可以浏览视频；注册并登录后，可以上传 MP4、MOV、MKV 或 WebM、选择 Creative Commons 许可证，并用 Markdown、LaTeX 和公式键盘参与讨论。项目优先考虑简洁、自行托管、本地资源，不依赖外部数据库或运行时 CDN。
 
-项目中文名为“同见”(Tongjian)。英文名为 Synopt,是后来才定的——它不是项目最初的名称。由于项目在英文名确定前就已开始,代码里仍保留少量历史遗留标识(如 `tongjian_session` / `tongjian_csrf` Cookie 和 `tongjian:*` 浏览器存储键)用于连贯;这些是内部实现,不代表品牌偏好。数据库文件为 `synopt.sqlite`。
+项目中文名为“同见”(Tongjian)。英文名为 Synopt,是后来才定的——它不是项目最初的名称。由于项目在英文名确定前就已开始,代码里仍保留少量历史遗留标识(如 `tongjian_session` / `tongjian_csrf` Cookie 和 `tongjian:*` 浏览器存储键)用于连贯;这些是内部实现,不代表品牌偏好。新安装默认使用 `synopt.sqlite`；既有部署可通过 `DATABASE_PATH` 安全继续使用 `gongying.sqlite`。
 
 > 这是一次产品与技术尝试，目前没有实际运营或开放公网服务的计划。CMS V1 提供本地举报、审核、申诉和审计闭环，但不应被理解为已经具备生产平台所需的完整合规、法务、安全运维或事件响应能力。
 
@@ -112,6 +112,8 @@ npm run test:integration
 
 测试覆盖配置与输入边界、密码和安全令牌、头像/封面真实解码与去元数据、图片并发闸门、数据库迁移、持久删除队列、许可证规范化、Markdown/XSS、客户端 IP、冷却窗口、媒体状态机和真实 FFmpeg 验证，以及真实 HTTP 账号资料、内容撤回/删除、讨论墓碑、通知、注销、MP4/WebM 上传、伪文件头拒绝、Range 和讨论流程。CMS 测试另外覆盖迁移、固定权限、再认证、目标级举报人隔离、举报案件、内容与账号状态 CAS、申诉、审计、标签合并、验证 ABA 重试和短时私密媒体授权。图片与媒体相关测试会调用本机的 `ffmpeg`，媒体测试还会调用 `ffprobe`。
 
+最近一次隔离基线（Node 24 + FFmpeg，2026-08-27）：**单元测试 153/153**、**HTTP 集成测试 24/24**、**离线排序不变量 6/6**。
+
 [`docs/qa/README.md`](docs/qa/README.md) 中的截图和记录是账号功能加入前的历史 MVP 基线，不能替代当前版本的复验。
 
 媒体接入状态机、错误分类和中断恢复细节见 [`docs/media-pipeline.md`](docs/media-pipeline.md)。
@@ -124,7 +126,7 @@ CMS 的权限、状态机、事务和隐私边界见 [`docs/cms-technical-design
 | --- | --- | --- |
 | `PORT` | `3000` | HTTP 监听端口，必须是 1–65535 的整数。 |
 | `HOST_BIND_ADDRESS` | `127.0.0.1` | 仅供 Compose 使用的宿主机发布地址；不改变 Node 进程在容器内的监听地址。 |
-| `DATABASE_PATH` | `./data/synopt.sqlite` | SQLite 数据库路径。 |
+| `DATABASE_PATH` | `./data/synopt.sqlite` | 直接运行 Node 与两个 Compose 服务共同使用的 SQLite 路径；升级既有部署时应保留旧的 `./data/gongying.sqlite` 值。 |
 | `VIDEO_STORAGE_PATH` | `./data/videos` | 已验证视频及同文件系统上传临时文件的存储目录。 |
 | `MAX_UPLOAD_MB` | `1024` | 单个视频上传上限，单位 MiB，必须为正数。 |
 | `MEDIA_UPLOAD_CHUNK_MB` | `16` | 分片上传单片大小，单位 MiB。大文件（客户端阈值约 50 MiB）自动分片，小文件保持一次性上传。 |
@@ -167,7 +169,7 @@ docker compose up -d
 docker compose ps
 ```
 
-Compose 会启动 `app` 与 `validator` 两个服务。两个镜像都包含 FFmpeg：Web 服务只用它真实解码并规范化小型用户图片，独立验证器处理视频。两者均使用只读根文件系统、移除 Linux capabilities并限制 CPU、内存和 PID；验证器还完全关闭网络。它们通过共享的 `./data` 与 SQLite 状态协作。
+Compose 会启动 `app` 与 `validator` 两个服务。两者从 `.env` 接收同一个 `DATABASE_PATH`；相对的 `./data/...` 在容器 `/app` 下解析，因此落在宿主机共享的 `./data` 挂载中。两个镜像都包含 FFmpeg：Web 服务只用它真实解码并规范化小型用户图片，独立验证器处理视频。两者均使用只读根文件系统、移除 Linux capabilities并限制 CPU、内存和 PID；验证器还完全关闭网络。
 
 用户图片目前仍在 Web 请求内同步调用原生解码器；协议白名单、单帧、超时、单进程线程、按账号/IP 冷却、全局并发闸门与容器资源上限共同约束这个风险。若进入实际运营，应像视频一样把图片规范化迁到无网络、最小权限的独立 worker，而不把当前 MVP 当作最终隔离边界。
 
@@ -254,11 +256,11 @@ SESSION_COOKIE_SECURE=true
 
 浏览器检查只是体验层。服务端先检查规范资产的 MP4/WebM 签名，再写入 `.pending`；独立验证器重新确认真实容器和编码、遍历数据包、检查时长/分辨率/帧率与 MP4 顶层结构、计算 SHA-256，并分别完整解码视频与音频。验证任务在长时间解码期间周期续租，完成、拒绝、失败和自动封面写入都必须匹配最新租约版本；任务被其他 worker 重领后，旧 worker 不能再提交状态或排队删除文件。小比例可恢复错误会得到 `ready_with_warnings`，超过动态阈值、结构越界、截断、空轨、未知编码或解码不完整会得到 `rejected`；FFmpeg 缺失、超时、OOM 等基础设施故障记为可重试的 `validation_failed`，不会伪装成“用户文件损坏”。
 
-当前 HEVC 还没有 hevc.js/WebCodecs 回退；这类回退需要另一套分段媒体和 HTTPS 能力设计。局域网 HTTP 不影响本期纯 demux/remux，但不支持 HEVC 的浏览器仍无法播放 HEVC。浏览器在当前测试上限 1024 MiB 内会同时持有源文件和重封装结果，低内存移动设备仍可能失败；更大文件需要以后设计分块、可恢复上传。
+当前 HEVC 还没有 hevc.js/WebCodecs 回退；这类回退需要另一套分段媒体和 HTTPS 能力设计。局域网 HTTP 不影响本期纯 demux/remux，但不支持 HEVC 的浏览器仍无法播放 HEVC。规范化阶段浏览器可能同时持有源文件和重封装结果，因此即使后续网络传输已经分片，低内存移动设备仍可能失败。分片会话在单进程内存中登记并于 30 分钟后过期：同一存活会话可重传分片，但应用重启或切换实例后不能续传。
 
 ## 备份、迁移与恢复
 
-应用启动时自动执行向前迁移。当前 schema 为 v7。按顺序：v5 在保留 v4 数据的基础上增加治理版本、讨论审核状态、举报案件、审核动作、申诉、审计和短时媒体授权；v6 重建 videos 表以加入媒体兼容度分级（放宽编解码 CHECK 并增加 `compatibility` 列）；v7 把 `video_votes` 重建为三档“价值”评价（高/中/低，`value IN (1,2,3)`）。旧讨论默认为 `visible`，治理版本从 0 开始。默认数据库名为 `synopt.sqlite`；不要为了改品牌手工改名后只迁走数据库而遗漏媒体文件。
+应用启动时自动执行向前迁移。当前 schema 为 v7。按顺序：v5 在保留 v4 数据的基础上增加治理版本、讨论审核状态、举报案件、审核动作、申诉、审计和短时媒体授权；v6 重建 videos 表以加入媒体兼容度分级（放宽编解码 CHECK 并增加 `compatibility` 列）；v7 把 `video_votes` 重建为三档“价值”评价（高/中/低，`value IN (1,2,3)`）。旧讨论默认为 `visible`，治理版本从 0 开始。新安装默认使用 `synopt.sqlite`。既有部署若已有 `data/gongying.sqlite`，应在 `.env` 中保留 `DATABASE_PATH=./data/gongying.sqlite` 供两个 Compose 服务共同使用；也可停机后一致迁移数据库及 WAL/SHM，不能只改配置文件名，否则会启动一个空库。
 
 首次用新版本打开既有 v4 数据前，以及之后每次重要升级前，都应制作一致备份。最直接的方法是短暂停止应用与 validator 并复制整个 `data` 目录，以同时保留 SQLite 数据库、WAL/SHM 辅助文件（若存在）、账号、会话、治理记录和所有媒体：
 
@@ -271,7 +273,10 @@ docker compose start app validator
 升级后应检查 `/healthz`、后台登录、管理员数量、待处理案件和任务队列，并确认数据库版本与外键。项目运行不依赖 `sqlite3` 命令；若主机另行安装了该只读检查工具，可执行：
 
 ```bash
-sqlite3 data/synopt.sqlite 'PRAGMA user_version; PRAGMA foreign_key_check;'
+set -a
+. ./.env
+set +a
+sqlite3 "$DATABASE_PATH" 'PRAGMA user_version; PRAGMA foreign_key_check;'
 ```
 
 第一条结果应为 `7`，`foreign_key_check` 不应返回任何行。不要在应用运行时复制单个 SQLite 主文件，也不要通过手工降低 `PRAGMA user_version` 回滚；旧程序无法理解 v7 表与状态。

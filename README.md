@@ -8,7 +8,7 @@
 
 *Synopt* is an experimental MVP for open knowledge and non-profit video sharing: anyone can browse videos; after registering and signing in, you can upload MP4, MOV, MKV, or WebM, choose a Creative Commons license, and join discussions using Markdown, LaTeX, and a formula keyboard. The project prioritizes simplicity, self-hosting, and local resources — it does not depend on an external database or a runtime CDN.
 
-The project’s name is 同见 (Tongjian). The English name is Synopt, which was chosen later — it was not the project’s original name. Because the project began before the English name existed, a few legacy identifiers remain in the code (e.g., `tongjian_session` / `tongjian_csrf` cookies and `tongjian:*` browser-storage keys) for continuity; they are internal and do not represent a branding preference. The database file is `synopt.sqlite`.
+The project’s name is 同见 (Tongjian). The English name is Synopt, which was chosen later — it was not the project’s original name. Because the project began before the English name existed, a few legacy identifiers remain in the code (e.g., `tongjian_session` / `tongjian_csrf` cookies and `tongjian:*` browser-storage keys) for continuity; they are internal and do not represent a branding preference. New installs default to `synopt.sqlite`; existing deployments may safely keep `gongying.sqlite` through `DATABASE_PATH`.
 
 > This is a product and technical experiment, with no current plans for actual operation or a public service. CMS V1 provides a local reporting, moderation, appeal, and audit loop, but should not be understood as already having the full compliance, legal, security-operations, or incident-response capabilities of a production platform.
 
@@ -112,6 +112,8 @@ npm run test:integration
 
 Tests cover config and input boundaries, passwords and security tokens, real avatar/cover decoding and metadata stripping, the image concurrency gate, database migrations, the persistent-deletion queue, license normalization, Markdown/XSS, client IP, cooldown windows, the media state machine and real FFmpeg validation, and real HTTP account/profile, content withdrawal/deletion, discussion tombstones, notifications, sign-out, MP4/WebM upload, fake-header rejection, Range, and discussion flows. CMS tests additionally cover the migrations, fixed permissions, re-authentication, target-level reporter isolation, report cases, content and account status CAS, appeals, audit, tag merging, validation ABA retries, and short-lived private-media authorization. Image and media tests call the host’s `ffmpeg`, and media tests also call `ffprobe`.
 
+Latest isolated baseline (Node 24 + FFmpeg, 2026-08-27): **153/153 unit tests**, **24/24 HTTP integration tests**, and **6/6 offline ranking invariants**.
+
 The screenshots and notes in [`docs/qa/README.md`](docs/qa/README.md) are a historical MVP baseline from before account features and are not a substitute for re-verifying the current version.
 
 The media ingestion state machine, error classification, and interruption recovery are in [`docs/media-pipeline.md`](docs/media-pipeline.md).
@@ -124,7 +126,7 @@ CMS permissions, state machines, transactions, and privacy boundaries are in [`d
 | --- | --- | --- |
 | `PORT` | `3000` | HTTP listen port; must be an integer 1–65535. |
 | `HOST_BIND_ADDRESS` | `127.0.0.1` | Host publish address for Compose only; does not change the Node process’s listen address inside the container. |
-| `DATABASE_PATH` | `./data/synopt.sqlite` | SQLite database path. |
+| `DATABASE_PATH` | `./data/synopt.sqlite` | SQLite database path used by direct Node and both Compose services; keep the legacy `./data/gongying.sqlite` value when upgrading an existing deployment. |
 | `VIDEO_STORAGE_PATH` | `./data/videos` | Directory for validated videos and same-filesystem upload temp files. |
 | `MAX_UPLOAD_MB` | `1024` | Per-video upload cap, in MiB; must be positive. |
 | `MEDIA_UPLOAD_CHUNK_MB` | `16` | Chunk size for chunked upload, in MiB. Larger files (client threshold ~50 MiB) auto-chunk; smaller files upload in a single request. |
@@ -167,7 +169,7 @@ docker compose up -d
 docker compose ps
 ```
 
-Compose starts two services, `app` and `validator`. Both images include FFmpeg: the web service uses it only to actually decode and normalize small user images; the standalone validator handles videos. Both use a read-only root filesystem, drop Linux capabilities, and cap CPU, memory, and PIDs; the validator also has networking fully disabled. They cooperate through the shared `./data` and SQLite state.
+Compose starts two services, `app` and `validator`. Both receive the same `DATABASE_PATH` from `.env`; a relative `./data/...` value resolves under `/app` and therefore points into the shared host `./data` mount. Both images include FFmpeg: the web service uses it only to actually decode and normalize small user images; the standalone validator handles videos. Both use a read-only root filesystem, drop Linux capabilities, and cap CPU, memory, and PIDs; the validator also has networking fully disabled.
 
 User images are currently still normalized synchronously inside the web request with a native decoder; a protocol allowlist, single-frame, timeout, per-process thread, per-account/IP cooldown, global concurrency gate, and container resource caps together bound this risk. For real operation you should move image normalization to a no-network, least-privilege worker like videos, and not treat the current MVP as the final isolation boundary.
 
@@ -254,11 +256,11 @@ Re-muxing only happens when the input container differs; compressed audio/video 
 
 The browser check is only a UX layer. The server first checks the MP4/WebM signature of the normalized asset, then writes to `.pending`; the standalone validator re-confirms the real container and codecs, walks packets, checks duration/resolution/frame-rate and the MP4 top-level structure, computes SHA-256, and fully decodes video and audio separately. During long decode tasks the lease is renewed periodically; completion, rejection, failure, and automatic cover write must all match the latest lease version. After a task is re-claimed by another worker, the old worker can no longer submit state or queue a file deletion. Small recoverable error ratios get `ready_with_warnings`; exceeding a dynamic threshold, structural overruns, truncation, empty tracks, unknown codecs, or incomplete decode get `rejected`; infrastructure failures such as missing FFmpeg, timeout, or OOM are recorded as retryable `validation_failed`, never masked as “user file corrupted.”
 
-There is currently no HEVC fallback via hevc.js/WebCodecs; such a fallback would need a separate segmented-media and HTTPS design. LAN HTTP does not affect this release’s pure demux/remux, but browsers without HEVC still cannot play HEVC. Within the current 1024 MiB test limit the browser holds both the source and the re-muxed result, so low-memory mobile devices may still fail; larger files will require a chunked, resumable upload design later.
+There is currently no HEVC fallback via hevc.js/WebCodecs; such a fallback would need a separate segmented-media and HTTPS design. LAN HTTP does not affect this release’s pure demux/remux, but browsers without HEVC still cannot play HEVC. During normalization the browser may hold both source and re-muxed output, so low-memory mobile devices can still fail even though the later network transfer is chunked. Chunk sessions are process-local and expire after 30 minutes: chunks can be resent within a live session, but uploads do not resume across an app restart or another instance.
 
 ## Backup, migration, and restore
 
-The app runs forward migrations automatically at startup. The current schema is v7. The migrations added, in order: v5 keeps v4 data and adds governance versions, discussion moderation status, report cases, moderation actions, appeals, audit, and short-lived media grants; v6 rebuilds the videos table for media-compatibility tiers (widened codec checks and a `compatibility` column); v7 rebuilds `video_votes` into a three-tier “value” rating (高/中/低 — high/medium/low, `value IN (1,2,3)`). Old discussions default to `visible`, governance versions start at 0. The default database is named `synopt.sqlite`; don’t try to rebrand by hand-renaming and migrating only the database while forgetting the media files.
+The app runs forward migrations automatically at startup. The current schema is v7. The migrations added, in order: v5 keeps v4 data and adds governance versions, discussion moderation status, report cases, moderation actions, appeals, audit, and short-lived media grants; v6 rebuilds the videos table for media-compatibility tiers (widened codec checks and a `compatibility` column); v7 rebuilds `video_votes` into a three-tier “value” rating (高/中/低 — high/medium/low, `value IN (1,2,3)`). Old discussions default to `visible`, governance versions start at 0. New installs default to `synopt.sqlite`. If an existing deployment has `data/gongying.sqlite`, keep `DATABASE_PATH=./data/gongying.sqlite` in `.env` for both Compose services, or stop both services and migrate the database plus WAL/SHM sidecars consistently; changing only the configured filename starts a new empty database.
 
 Before opening existing v4 data with a new version the first time, and before every later major upgrade, make a consistent backup. The most direct way is to briefly stop the app and validator and copy the whole `data` directory, which keeps the SQLite database, any WAL/SHM sidecar files, accounts, sessions, governance records, and all media together:
 
@@ -271,7 +273,10 @@ docker compose start app validator
 After upgrading, check `/healthz`, backend login, administrator count, pending cases, and the task queue, and confirm the database version and foreign keys. Running the project does not depend on the `sqlite3` command; if you installed that read-only tool separately, you can run:
 
 ```bash
-sqlite3 data/synopt.sqlite 'PRAGMA user_version; PRAGMA foreign_key_check;'
+set -a
+. ./.env
+set +a
+sqlite3 "$DATABASE_PATH" 'PRAGMA user_version; PRAGMA foreign_key_check;'
 ```
 
 The first result should be `7`, and `foreign_key_check` should return no rows. Don’t copy a single SQLite main file while the app is running, and don’t roll back by hand-lowering `PRAGMA user_version`; old programs cannot understand the v7 tables and states.

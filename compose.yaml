@@ -11,7 +11,10 @@ services:
     environment:
       NODE_ENV: production
       PORT: "${PORT:-3000}"
-      DATABASE_PATH: /app/data/synopt.sqlite
+      # Relative paths are resolved from /app. Keeping this configurable lets
+      # existing deployments continue using ./data/gongying.sqlite while new
+      # installs use the Synopt filename from .env.example.
+      DATABASE_PATH: "${DATABASE_PATH:-./data/synopt.sqlite}"
       VIDEO_STORAGE_PATH: /app/data/videos
       MAX_UPLOAD_MB: "${MAX_UPLOAD_MB:-1024}"
       DISCUSSION_COOLDOWN_SECONDS: "${DISCUSSION_COOLDOWN_SECONDS:-30}"
@@ -71,7 +74,7 @@ services:
     network_mode: none
     environment:
       NODE_ENV: production
-      DATABASE_PATH: /app/data/synopt.sqlite
+      DATABASE_PATH: "${DATABASE_PATH:-./data/synopt.sqlite}"
       VIDEO_STORAGE_PATH: /app/data/videos
       MAX_VIDEO_DURATION_SECONDS: "${MAX_VIDEO_DURATION_SECONDS:-7200}"
       MAX_VIDEO_WIDTH: "${MAX_VIDEO_WIDTH:-4096}"
